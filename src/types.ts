@@ -15,6 +15,15 @@ export interface ModelDetails {
   materialCount?: number;
   rigged?: boolean;
   dracoCompression?: string;
+  characterName?: string;
+  species?: string;
+  profileId?: string;
+  variantOf?: string;
+  modifiers?: string[];
+  modularParts?: number;
+  tailSegments?: number;
+  backSpines?: number;
+  rigPresent?: boolean;
 }
 
 export type SynthesisStage = 'ingestion' | 'mesh_synthesis' | 'complete';
@@ -29,13 +38,24 @@ export interface SynthesisProgressData {
   vertices?: number;
 }
 
+export interface ModelArtifactRef {
+  jobId: string;
+  provider: string;
+  glbUrl?: string;
+  downloadUrl?: string;
+  sha256?: string;
+  effectStatus?: string;
+}
+
 export interface ChatMessage {
   id: string;
   sender: MessageSender;
   text: string;
   timestamp: string;
+  source?: string;
   is3DModel?: boolean;
   modelDetails?: ModelDetails;
+  modelAsset?: ModelArtifactRef;
   attachedImage?: string;
   isSynthesizing?: boolean;
   synthesisProgress?: SynthesisProgressData;
@@ -48,6 +68,7 @@ export interface SynthesisHistoryItem {
   timestamp: string;
   promptSnippet?: string;
   modelDetails: ModelDetails;
+  modelAsset?: ModelArtifactRef;
 }
 
 export type AppLanguage = 'en' | 'ru' | 'de';

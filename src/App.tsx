@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   Scale
 } from 'lucide-react';
+import { FolderKanban } from 'lucide-react';
 import { ChatMessage, AppLanguage, SynthesisHistoryItem } from './types';
 import { GolemDrawer } from './components/GolemDrawer';
 import { ChatBubble } from './components/ChatBubble';
@@ -24,6 +25,174 @@ import { FlutterCodeViewer } from './components/FlutterCodeViewer';
 import { GolemHoloLogo } from './components/GolemHoloLogo';
 import { VramComputeGauge, SynthesisStageType } from './components/VramComputeGauge';
 import { SynthesisComparator } from './components/SynthesisComparator';
+import { ProjectBrowser } from './components/ProjectBrowser';
+import { organClient, pickArtifact, OrganResult } from './services/organClient';
+
+
+import { voiceClient } from './services/voiceClient';
+async function pickLocalFile(accept: string): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.addEventListener('change', () => resolve(input.files?.[0] || null), { once: true });
+    input.addEventListener('cancel', () => resolve(null), { once: true });
+    input.click();
+  });
+}
+
+async function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('File read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function runAudioDiagnostic(show: (message: string) => void) {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    const context = new AudioCtx();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.value = 432;
+    gain.gain.value = 0.035;
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.22);
+    oscillator.onended = () => void context.close();
+    show('Audio diagnostic: real 432 Hz test tone emitted.');
+  } catch {
+    show('Audio diagnostic is unavailable on this platform.');
+  }
+}
+
+function jobProgress(state: string) {
+  switch (state) {
+    case 'queued':
+      return {
+        progress: 8,
+        stage: 'ingestion' as const,
+        status: 'Queued for 3D/CAD Organ...',
+        detail: 'Request validated and persisted.',
+      };
+    case 'accepted':
+      return {
+        progress: 18,
+        stage: 'ingestion' as const,
+        status: 'Accepted by 3D/CAD Organ...',
+        detail: 'Selecting bounded provider path.',
+      };
+    case 'running':
+      return {
+        progress: 68,
+        stage: 'mesh_synthesis' as const,
+        status: 'Real provider executing geometry job...',
+        detail: 'Blender / FreeCAD / OpenSCAD is running.',
+      };
+    case 'verifying':
+      return {
+        progress: 90,
+        stage: 'mesh_synthesis' as const,
+        status: 'Verifying generated artifacts...',
+        detail: 'Checking file format, hashes and effect metadata.',
+      };
+    default:
+      return {
+        progress: 45,
+        stage: 'mesh_synthesis' as const,
+        status: `Runtime state: ${state}`,
+        detail: '3D/CAD Organ active.',
+      };
+  }
+}
+
+function formatArtifactSize(bytes: number): string {
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1048576) return `${(value / 1024).toFixed(2)} KB`;
+  return `${(value / 1048576).toFixed(2)} MB`;
+}
+
+function modelFromResult(result: OrganResult, fallbackName: string) {
+  const receipt = result.receipt;
+  if (!receipt) {
+    throw new Error(
+      result.error_details || result.error_code || 'Missing execution receipt',
+    );
+  }
+
+  const artifacts = receipt.evidence.artifact_evidence || [];
+  const glb = pickArtifact(result, 'glb');
+  const preferred =
+    glb ||
+    pickArtifact(result, 'step') ||
+    pickArtifact(result, 'stl') ||
+    pickArtifact(result, 'blend') ||
+    artifacts[0];
+
+  const metadata = receipt.evidence.effect_verification?.metadata || {};
+  const bbox = metadata.bbox;
+  const dimensions =
+    bbox && typeof bbox === 'object'
+      ? `${Number(bbox.x || 0).toFixed(2)} × ${Number(bbox.y || 0).toFixed(2)} × ${Number(bbox.z || 0).toFixed(2)}`
+      : 'provider verified';
+
+  const elapsed = Math.max(
+    0,
+    receipt.end_timestamp - receipt.start_timestamp,
+  );
+
+  return {
+    details: {
+      name: fallbackName,
+      vertices: Number(metadata.vertices || 0),
+      polygons: Number(metadata.polygons || 0),
+      format: artifacts.map((a) => a.format.toUpperCase()).join(' / ') || 'VERIFIED',
+      renderTime: `${elapsed.toFixed(2)}s real`,
+      fileSize: preferred
+        ? formatArtifactSize(preferred.size)
+        : undefined,
+      textureComplexity:
+        receipt.provider_id === 'blender'
+          ? 'Blender geometry pipeline'
+          : 'Parametric CAD solid',
+      meshDensity:
+        receipt.provider_id === 'blender'
+          ? 'verified mesh'
+          : 'verified parametric solid',
+      dimensions,
+      uvChannels: 0,
+      drawCalls: 0,
+      materialCount: receipt.provider_id === 'blender' ? 1 : 0,
+      dracoCompression: 'not applied',
+      characterName: typeof metadata.character_name === 'string' ? metadata.character_name : undefined,
+      species: typeof metadata.species === 'string' ? metadata.species : undefined,
+      profileId: typeof metadata.profile_id === 'string' ? metadata.profile_id : undefined,
+      variantOf: typeof metadata.variant_of === 'string' ? metadata.variant_of : undefined,
+      modifiers: Array.isArray(metadata.modifiers) ? metadata.modifiers.map(String) : undefined,
+      modularParts: Number(metadata.modular_part_count || 0) || undefined,
+      tailSegments: Number(metadata.tail_segment_count || 0) || undefined,
+      backSpines: Number(metadata.back_spine_count || 0) || undefined,
+      rigPresent: typeof metadata.rig_present === 'boolean' ? metadata.rig_present : undefined,
+    },
+    asset: {
+      jobId: result.job_id,
+      provider: receipt.provider_id,
+      glbUrl: glb
+        ? organClient.artifactUrl(result.job_id, glb.path)
+        : undefined,
+      downloadUrl: preferred
+        ? organClient.artifactUrl(result.job_id, preferred.path)
+        : undefined,
+      sha256: preferred?.sha256,
+      effectStatus: receipt.effect_status,
+    },
+  };
+}
+
 
 export default function App() {
   // Navigation / View layout
@@ -32,6 +201,7 @@ export default function App() {
   const [isBottomSheetOpen, setIsBottomSheetOpen] = useState(false);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [isComparatorOpen, setIsComparatorOpen] = useState(false);
+  const [isProjectBrowserOpen, setIsProjectBrowserOpen] = useState(false);
   const [comparatorModelAId, setComparatorModelAId] = useState<string | undefined>(undefined);
   const [comparatorModelBId, setComparatorModelBId] = useState<string | undefined>(undefined);
   const [currentLanguage, setCurrentLanguage] = useState<AppLanguage>('en');
@@ -52,82 +222,10 @@ export default function App() {
   // Chat State
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
-      id: '0a',
+      id: 'boot',
       sender: 'golem',
-      text: 'Archive restored: Previously synthesized Cybernetic Monolith Ward (5.40 MB, 16.8K polys) and Crystalline Kinetic Core (6.75 MB, 21.5K polys) stored in synthesis history.',
-      timestamp: '11:10',
-      is3DModel: true,
-      modelDetails: {
-        name: 'Cybernetic Monolith Ward',
-        vertices: 8920,
-        polygons: 16840,
-        format: 'GLB / USDZ',
-        renderTime: '1.5s local',
-        fileSize: '5.40 MB',
-        textureComplexity: '4K PBR (Normal, Metallic, AO)',
-        meshDensity: '34.2 tris/cm²',
-        dimensions: '2.40m × 1.10m × 3.20m',
-        uvChannels: 2,
-        drawCalls: 1,
-        materialCount: 3,
-        dracoCompression: 'Draco L7 (-65%)',
-      },
-    },
-    {
-      id: '0b',
-      sender: 'golem',
-      text: 'Archive restored: Crystalline Kinetic Core synthesized with multi-angle tessellation.',
-      timestamp: '12:45',
-      is3DModel: true,
-      modelDetails: {
-        name: 'Crystalline Kinetic Core',
-        vertices: 11200,
-        polygons: 21500,
-        format: 'GLB / USDZ',
-        renderTime: '1.8s local',
-        fileSize: '6.75 MB',
-        textureComplexity: '4K Ultra-PBR (Emissive Core)',
-        meshDensity: '39.8 tris/cm²',
-        dimensions: '1.60m × 1.60m × 1.95m',
-        uvChannels: 3,
-        drawCalls: 1,
-        materialCount: 4,
-        dracoCompression: 'Draco L7 (-68%)',
-      },
-    },
-    {
-      id: '1',
-      sender: 'golem',
-      text: 'Core initialized. I am GOLEM, your holographic stone guardian companion. Input your prompt to synthesize 3D spatial models.',
-      timestamp: '14:20',
-    },
-    {
-      id: '2',
-      sender: 'user',
-      text: 'Synthesize an ancient runic monolith guardian with crystalline obsidian veins.',
-      timestamp: '14:22',
-    },
-    {
-      id: '3',
-      sender: 'golem',
-      text: 'Spatial mesh synthesized. Quantum lattice rendered 12,480 polygonal facets with deep obsidian shader. Tap the 3D model to inspect file footprint, texture complexity, and wireframe density.',
-      timestamp: '14:23',
-      is3DModel: true,
-      modelDetails: {
-        name: 'Runic Stone Guardian',
-        vertices: 6420,
-        polygons: 12480,
-        format: 'GLB / USDZ',
-        renderTime: '1.2s local',
-        fileSize: '4.82 MB',
-        textureComplexity: '4K PBR (Albedo, Normal, Roughness, Metalness, AO)',
-        meshDensity: '28.4 tris/cm²',
-        dimensions: '1.85m × 1.20m × 2.40m',
-        uvChannels: 2,
-        drawCalls: 1,
-        materialCount: 3,
-        dracoCompression: 'Draco L7 (-64%)',
-      },
+      text: 'GOLEM UI initialized. Configure the 3D/CAD Compute Node in the drawer, then send a real mesh or CAD request.',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
 
@@ -159,6 +257,7 @@ export default function App() {
       timestamp: m.timestamp,
       promptSnippet: m.text,
       modelDetails: m.modelDetails!,
+      modelAsset: m.modelAsset,
     }))
     .reverse();
 
@@ -194,213 +293,124 @@ export default function App() {
     setIsComparatorOpen(true);
   };
 
-  const handleSendMessage = (overridePrompt?: string) => {
+  const handleSendMessage = async (overridePrompt?: string) => {
     const rawText = (overridePrompt ?? promptText).trim();
     if (!rawText && !attachedThumbnail) return;
-    if (isSynthesizing) return; // Prevent overlapping synthesis runs
+    if (isSynthesizing) return;
 
-    const userMsgText = rawText || 'Transmitted spatial visual data for 3D reconstruction.';
+    const userMsgText = rawText || 'Analyze the attached reference without fabricating unavailable geometry.';
     const userMsg: ChatMessage = {
-      id: Date.now().toString(),
-      sender: 'user',
-      text: userMsgText,
+      id: Date.now().toString(), sender: 'user', text: userMsgText,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       attachedImage: attachedThumbnail || undefined,
     };
-
     setMessages((prev) => [...prev, userMsg]);
     setPromptText('');
+    const imageForRequest = attachedThumbnail || undefined;
     setAttachedThumbnail(null);
 
-    // Initialize GOLEM's incoming message with real-time synthesis progress
-    const synthMsgId = (Date.now() + 1).toString();
-    const targetModelName = userMsgText.length > 28
-      ? `${userMsgText.slice(0, 25)}...`
-      : userMsgText;
-
-    const initialSynthMsg: ChatMessage = {
-      id: synthMsgId,
-      sender: 'golem',
-      text: targetModelName,
+    const golemMsgId = (Date.now() + 1).toString();
+    setMessages((prev) => [...prev, {
+      id: golemMsgId, sender: 'golem', text: userMsgText,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       isSynthesizing: true,
-      synthesisProgress: {
-        stage: 'ingestion',
-        progress: 4,
-        statusText: 'Stage 1/2: Ingesting spatial prompt & optical scan tensors...',
-        subDetail: 'Parsing lexical tokens & computing voxel grid bounds (512³)...',
-        tflops: 124,
-        vertices: 1840,
-        polygons: 3200,
-      },
-    };
+      synthesisProgress: { stage: 'ingestion', progress: 4,
+        statusText: 'GOLEM semantic runtime is interpreting the request...',
+        subDetail: 'Deterministic fast path first; local LLM only when needed.' },
+    }]);
+    setIsSynthesizing(true); setSynthesisProgress(4); setSynthesisStage('ingestion');
 
-    setMessages((prev) => [...prev, initialSynthMsg]);
-    setIsSynthesizing(true);
-    setSynthesisProgress(4);
-    setSynthesisStage('ingestion');
-
-    if (synthesisIntervalRef.current) {
-      clearInterval(synthesisIntervalRef.current);
-    }
-
-    let progress = 4;
-
-    synthesisIntervalRef.current = setInterval(() => {
-      progress += Math.floor(Math.random() * 3) + 3; // +3% to +5% per 70ms (~2s total duration)
-
-      if (progress >= 100) {
-        progress = 100;
-        setSynthesisProgress(100);
-        setSynthesisStage('complete');
-        if (synthesisIntervalRef.current) {
-          clearInterval(synthesisIntervalRef.current);
-          synthesisIntervalRef.current = null;
-        }
-
-        // Show 100% completion state on progress bar
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === synthMsgId
-              ? {
-                  ...msg,
-                  synthesisProgress: {
-                    stage: 'complete',
-                    progress: 100,
-                    statusText: 'Stage 2/2: Spatial 3D mesh synthesis completed successfully!',
-                    subDetail: 'Tessellated 18,940 faces, baked 4K PBR maps, Draco L7 compressed.',
-                    tflops: 142,
-                    vertices: 9840,
-                    polygons: 18940,
-                  },
-                }
-              : msg
-          )
+    try {
+      const routed = await organClient.chat({ message: userMsgText, imageDataUrl: imageForRequest, maxTime: 180 });
+      if (routed?.kind === 'conversation' || routed?.kind === 'clarification') {
+        const waiting = routed?.kind === 'clarification';
+        setMessages((prev) => prev.map((msg) => msg.id === golemMsgId ? {
+          ...msg, isSynthesizing: false, is3DModel: false,
+          text: String(routed?.message || (waiting ? 'Need additional engineering input.' : 'GOLEM online.')),
+          source: String(routed?.source || ''),
+          synthesisProgress: undefined,
+        } : msg));
+        setIsSynthesizing(false); setSynthesisProgress(0); setSynthesisStage('idle');
+        void voiceClient.speak(
+          String(routed?.message || ''),
+          waiting ? 'IMPORTANT' : 'TEAM',
         );
-
-        // Smoothly transition into the interactive 3D model viewer after brief celebration
-        setTimeout(() => {
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === synthMsgId
-                ? {
-                    ...msg,
-                    isSynthesizing: false,
-                    is3DModel: true,
-                    text: `Topology ingestion and neural mesh synthesis complete for "${targetModelName}". Generated 18,940 faces, 4K multi-layer PBR shaders, and 31.2 tris/cm² density. Tap the card below to inspect full geometry telemetry.`,
-                    modelDetails: {
-                      name: targetModelName,
-                      vertices: 9840,
-                      polygons: 18940,
-                      format: 'GLB / USDZ',
-                      renderTime: '1.4s local',
-                      fileSize: '6.15 MB',
-                      textureComplexity: '4K Ultra-PBR (Albedo, Normal, Roughness, Metalness, AO, Emissive)',
-                      meshDensity: '31.2 tris/cm²',
-                      dimensions: '2.10m × 1.45m × 2.80m',
-                      uvChannels: 3,
-                      drawCalls: 1,
-                      materialCount: 4,
-                      dracoCompression: 'Draco L7 (-68%)',
-                    },
-                  }
-                : msg
-            )
-          );
-          setIsSynthesizing(false);
-          setSynthesisProgress(0);
-          setSynthesisStage('idle');
-          showSnackBar(`3D Mesh synthesized: ${targetModelName} ready.`);
-        }, 500);
-
-      } else {
-        const isIngestion = progress < 50;
-        const stage: 'ingestion' | 'mesh_synthesis' = isIngestion ? 'ingestion' : 'mesh_synthesis';
-
-        setSynthesisProgress(progress);
-        if (progress < 20) {
-          setSynthesisStage('ingestion');
-        } else if (progress < 50) {
-          setSynthesisStage('voxelization');
-        } else if (progress < 68) {
-          setSynthesisStage('marching_cubes');
-        } else if (progress < 85) {
-          setSynthesisStage('baking');
-        } else {
-          setSynthesisStage('compression');
-        }
-
-        let statusText = '';
-        let subDetail = '';
-        let vertices = 1840;
-        let polygons = 3200;
-
-        if (progress < 20) {
-          statusText = 'Stage 1/2: Ingesting spatial prompt & optical scan tensors...';
-          subDetail = 'Tokenizing geometric descriptors & boundary constraints...';
-          vertices = Math.round(1800 + (progress / 20) * 1400);
-          polygons = Math.round(3200 + (progress / 20) * 2200);
-        } else if (progress < 36) {
-          statusText = 'Stage 1/2: Extracting boundary point clouds & spatial embeddings...';
-          subDetail = 'Calculating normal vectors and depth disparity...';
-          vertices = Math.round(3200 + ((progress - 20) / 16) * 2100);
-          polygons = Math.round(5400 + ((progress - 20) / 16) * 3200);
-        } else if (progress < 50) {
-          statusText = 'Stage 1/2: Constructing 3D voxel coordinate lattice (512³)...';
-          subDetail = 'Voxelization complete. Preparing neural marching cubes...';
-          vertices = Math.round(5300 + ((progress - 36) / 14) * 1700);
-          polygons = Math.round(8600 + ((progress - 36) / 14) * 2800);
-        } else if (progress < 68) {
-          statusText = 'Stage 2/2: Neural marching cubes mesh synthesis (18,940 faces)...';
-          subDetail = 'Tessellating triangular topology and smoothing vertex normals...';
-          vertices = Math.round(7000 + ((progress - 50) / 18) * 1600);
-          polygons = Math.round(11400 + ((progress - 50) / 18) * 4400);
-        } else if (progress < 85) {
-          statusText = 'Stage 2/2: Baking 4K Ultra-PBR maps (Albedo, Normal, Roughness)...';
-          subDetail = 'Applying anisotropic metallic shaders and ambient occlusion...';
-          vertices = Math.round(8600 + ((progress - 68) / 17) * 900);
-          polygons = Math.round(15800 + ((progress - 68) / 17) * 2600);
-        } else {
-          statusText = 'Stage 2/2: Applying Draco L7 geometry compression & compiling GLB...';
-          subDetail = 'Compressing geometry (-68%) and linking spatial scene graph...';
-          vertices = 9840;
-          polygons = 18940;
-        }
-
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === synthMsgId
-              ? {
-                  ...msg,
-                  synthesisProgress: {
-                    stage,
-                    progress,
-                    statusText,
-                    subDetail,
-                    tflops: 124 + Math.round((progress / 100) * 18),
-                    vertices,
-                    polygons,
-                  },
-                }
-              : msg
-          )
-        );
+        showSnackBar(waiting ? 'GOLEM is waiting for engineering input.' : 'GOLEM local response received.');
+        return;
       }
-    }, 70);
+      if (routed?.kind !== 'job') throw new Error(routed?.message || 'Unknown GOLEM route');
+      const jobId = String(routed?.job?.job_id || '');
+      if (!jobId) throw new Error('GOLEM did not return a job_id');
+
+      const result = await organClient.waitForResult(jobId, (state) => {
+        const p = jobProgress(state);
+        setSynthesisProgress(p.progress);
+        setSynthesisStage(p.progress < 20 ? 'ingestion' : p.progress < 80 ? 'marching_cubes' : 'baking');
+        setMessages((prev) => prev.map((msg) => msg.id === golemMsgId ? {
+          ...msg,
+          synthesisProgress: { stage: p.stage, progress: p.progress, statusText: p.status, subDetail: p.detail },
+        } : msg));
+      });
+      if (result.status !== 'succeeded' || !result.receipt?.evidence?.effect_verification?.verified) {
+        throw new Error(result.error_details || result.error_code || 'Provider effect was not confirmed');
+      }
+      const mapped = modelFromResult(result, userMsgText.length > 34 ? `${userMsgText.slice(0,31)}...` : userMsgText);
+      setMessages((prev) => prev.map((msg) => msg.id === golemMsgId ? {
+        ...msg, isSynthesizing:false, is3DModel:true,
+        text:`Real ${result.receipt?.provider_id} artifact created and effect-confirmed. Job ${result.job_id}.`,
+        modelDetails:mapped.details, modelAsset:mapped.asset,
+        synthesisProgress:{ stage:'complete', progress:100, statusText:'GOLEM verified the real engineering effect.', subDetail:`Provider: ${result.receipt?.provider_id} // ${result.receipt?.effect_status}` },
+      } : msg));
+      setSynthesisProgress(100); setSynthesisStage('complete');
+      void voiceClient.speak('Геометрия подтверждена. Реальный эффект проверен.', 'IMPORTANT');
+      showSnackBar(`VERIFIED via ${result.receipt?.provider_id}.`);
+    } catch (error:any) {
+      const message = error?.message || String(error);
+      setMessages((prev) => prev.map((msg) => msg.id === golemMsgId ? {
+        ...msg, isSynthesizing:false, is3DModel:false, text:`GOLEM stopped: ${message}`, synthesisProgress:undefined,
+      } : msg));
+      void voiceClient.speak(`Ошибка GOLEM. ${message}`, 'IMPORTANT');
+      showSnackBar(`GOLEM: ${message}`);
+    } finally {
+      setIsSynthesizing(false);
+      setTimeout(() => { setSynthesisProgress(0); setSynthesisStage('idle'); }, 700);
+    }
   };
 
-  const handleActionSelect = (action: 'photo' | 'file' | 'camera') => {
+  const handleActionSelect = async (
+    action: 'photo' | 'file' | 'camera',
+  ) => {
     setIsBottomSheetOpen(false);
 
     if (action === 'photo') {
-      // Mock photo selection
-      setAttachedThumbnail('https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=400&q=80');
-      showSnackBar('Photo attached from local device library.');
-    } else if (action === 'file') {
-      showSnackBar('Mock 3D CAD/OBJ blueprint ingested.');
-    } else if (action === 'camera') {
-      setIsCameraOpen(true);
+      const file = await pickLocalFile('image/*');
+      if (!file) return;
+      if (file.size > 12 * 1024 * 1024) {
+        showSnackBar('Image is too large; maximum is 12 MB.');
+        return;
+      }
+      setAttachedThumbnail(await fileToDataUrl(file));
+      showSnackBar(`Photo attached: ${file.name}`);
+      return;
     }
+
+    if (action === 'file') {
+      const file = await pickLocalFile(
+        '.obj,.stl,.glb,.gltf,.step,.stp,.fcstd,.scad,.json,.txt,.pdf',
+      );
+      if (!file) return;
+      try {
+        const imported = await organClient.importFile(file);
+        showSnackBar(
+          `Imported ${file.name} as ${imported?.asset?.asset_id || 'asset'}.`,
+        );
+      } catch (error: any) {
+        showSnackBar(`Import failed: ${error?.message || error}`);
+      }
+      return;
+    }
+
+    setIsCameraOpen(true);
   };
 
   const handleCameraCapture = (imageDataUrl: string) => {
@@ -410,6 +420,9 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-black text-slate-100 font-sans">
+      {isProjectBrowserOpen && (
+        <ProjectBrowser onClose={() => setIsProjectBrowserOpen(false)} />
+      )}
       {/* ============================================================ */}
       {/* Top Application Bar: Brand, Status, Layout Controls */}
       {/* ============================================================ */}
@@ -447,7 +460,17 @@ export default function App() {
         </div>
 
         {/* Right: Mode Switcher & 3D Comparator */}
-        <div className="flex items-center gap-2">
+        <div className="hidden sm:flex items-center gap-2">
+          <button
+            id="header-open-projects-btn"
+            onClick={() => setIsProjectBrowserOpen(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono bg-slate-900 hover:bg-cyan-950 border border-cyan-500/50 text-cyan-200 transition-all cursor-pointer"
+            title="Open verified GOLEM projects"
+          >
+            <FolderKanban className="w-3.5 h-3.5" />
+            <span className="font-bold tracking-wider hidden sm:inline">PROJECTS</span>
+          </button>
+
           <button
             id="header-open-comparator-btn"
             onClick={() => handleOpenComparator()}
@@ -462,7 +485,7 @@ export default function App() {
           <div className="flex items-center gap-1 bg-slate-900 p-0.5 border border-cyan-500/40 clip-faceted-sm">
             <button
               onClick={() => setViewMode('app')}
-              title="Mobile Simulation Only"
+              title="Live GOLEM"
               className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono transition-all ${
                 viewMode === 'app'
                   ? 'bg-cyan-500 text-black font-bold'
@@ -475,7 +498,7 @@ export default function App() {
 
             <button
               onClick={() => setViewMode('split')}
-              title="Split: App + Flutter Code"
+              title="Split: GOLEM + Runtime"
               className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono transition-all ${
                 viewMode === 'split'
                   ? 'bg-cyan-500 text-black font-bold'
@@ -488,7 +511,7 @@ export default function App() {
 
             <button
               onClick={() => setViewMode('code')}
-              title="Flutter Dart Codebase"
+              title="Runtime / Contracts"
               className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono transition-all ${
                 viewMode === 'code'
                   ? 'bg-cyan-500 text-black font-bold'
@@ -496,11 +519,70 @@ export default function App() {
               }`}
             >
               <Code2 className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Dart Code (lib/)</span>
+              <span className="hidden sm:inline">Runtime</span>
             </button>
           </div>
         </div>
       </header>
+
+      {/* ============================================================ */}
+      {/* Mobile workspace mode switcher */}
+      {/* ============================================================ */}
+      <div
+        id="mobile-workspace-mode-switcher"
+        className="sm:hidden shrink-0 bg-black border-b border-cyan-500/40 px-2 py-1.5 flex items-center gap-1 z-30"
+      >
+        <button
+          type="button"
+          onClick={() => setViewMode('app')}
+          className={`flex-1 h-9 flex items-center justify-center gap-1.5 text-[10px] font-mono border transition-all ${
+            viewMode === 'app'
+              ? 'bg-cyan-500 border-cyan-300 text-black font-bold shadow-[0_0_10px_rgba(0,240,255,0.35)]'
+              : 'bg-slate-950 border-cyan-500/30 text-cyan-300'
+          }`}
+          title="GOLEM chat full screen"
+        >
+          <Smartphone className="w-3.5 h-3.5" />
+          <span>GOLEM</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setViewMode('split')}
+          className={`flex-1 h-9 flex items-center justify-center gap-1.5 text-[10px] font-mono border transition-all ${
+            viewMode === 'split'
+              ? 'bg-cyan-500 border-cyan-300 text-black font-bold shadow-[0_0_10px_rgba(0,240,255,0.35)]'
+              : 'bg-slate-950 border-cyan-500/30 text-cyan-300'
+          }`}
+          title="GOLEM and source code"
+        >
+          <Columns2 className="w-3.5 h-3.5" />
+          <span>SPLIT</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setViewMode('code')}
+          className={`flex-1 h-9 flex items-center justify-center gap-1.5 text-[10px] font-mono border transition-all ${
+            viewMode === 'code'
+              ? 'bg-cyan-500 border-cyan-300 text-black font-bold shadow-[0_0_10px_rgba(0,240,255,0.35)]'
+              : 'bg-slate-950 border-cyan-500/30 text-cyan-300'
+          }`}
+          title="Source code full screen"
+        >
+          <Code2 className="w-3.5 h-3.5" />
+          <span>CODE</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleOpenComparator()}
+          className="w-10 h-9 shrink-0 flex items-center justify-center bg-emerald-950 border border-emerald-500/60 text-emerald-300"
+          title="3D Comparator"
+        >
+          <Scale className="w-4 h-4" />
+        </button>
+      </div>
 
       {/* ============================================================ */}
       {/* Main Workspace: Flutter App Simulation + Flutter Code Viewer */}
@@ -541,6 +623,14 @@ export default function App() {
                 {/* Right: Audio Telemetry & Comparator Quick Action */}
                 <div className="flex items-center gap-0.5">
                   <button
+                    id="mobile-appbar-projects-btn"
+                    onClick={() => setIsProjectBrowserOpen(true)}
+                    className="p-1.5 text-cyan-400 hover:text-cyan-200 hover:bg-cyan-950/50 clip-faceted-sm transition-colors cursor-pointer"
+                    title="Open verified project history"
+                  >
+                    <FolderKanban className="w-4 h-4" />
+                  </button>
+                  <button
                     id="mobile-appbar-comparator-btn"
                     onClick={() => handleOpenComparator()}
                     className="p-1.5 text-cyan-400 hover:text-cyan-200 hover:bg-cyan-950/50 clip-faceted-sm transition-colors cursor-pointer"
@@ -549,7 +639,11 @@ export default function App() {
                     <Scale className="w-4 h-4" />
                   </button>
                   <button
-                    onClick={() => showSnackBar('Holo Audio Diagnostic: Frequency 432Hz locked.')}
+                    onClick={() => {
+                      const mode = voiceClient.cycleMode();
+                      void voiceClient.speak(`Режим голоса ${mode}`, 'CRITICAL', true);
+                      showSnackBar(`VOICE MODE: ${mode}`);
+                    }}
                     className="p-1.5 text-sky-400 hover:text-cyan-300 transition-colors cursor-pointer"
                     title="Audio Diagnostic"
                   >
@@ -623,7 +717,7 @@ export default function App() {
                       />
                       <div className="text-[11px] font-mono">
                         <div className="text-cyan-300 font-bold">OPTICAL SCAN ATTACHED</div>
-                        <div className="text-slate-400 text-[10px]">Ready for 3D neural synthesis</div>
+                        <div className="text-slate-400 text-[10px]">Ready for local GOLEM analysis</div>
                       </div>
                     </div>
                     <button
@@ -640,9 +734,9 @@ export default function App() {
                 <div className="mb-2 flex items-center gap-1.5 overflow-x-auto pb-0.5 text-[10px] font-mono select-none scrollbar-none">
                   <span className="text-slate-500 shrink-0 text-[9px] font-bold tracking-wider">QUICK SYNTH:</span>
                   {[
-                    'Obsidian Keystone',
-                    'Quantum Resonator',
-                    'Cyber Relic Prism',
+                    'Cylinder diameter 30 height 15',
+                    'cube size 3',
+                    'sphere radius 2',
                   ].map((preset) => (
                     <button
                       key={preset}
@@ -680,7 +774,7 @@ export default function App() {
                       onChange={(e) => setPromptText(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && !isSynthesizing && handleSendMessage()}
                       disabled={isSynthesizing}
-                      placeholder={isSynthesizing ? "Synthesizing 3D mesh in real-time..." : "Enter 3D synthesis prompt..."}
+                      placeholder={isSynthesizing ? "Executing verified 3D/CAD task..." : "Describe a 3D/CAD task..."}
                       className="w-full bg-transparent text-sm text-slate-100 placeholder:text-slate-500 focus:outline-hidden disabled:opacity-50"
                     />
                   </div>
@@ -711,7 +805,17 @@ export default function App() {
                   showSnackBar(`Language switched to: ${lang.toUpperCase()}`);
                 }}
                 onSelectFolder={(folderName) => {
-                  showSnackBar(`Accessed storage vault: ${folderName}`);
+                  void organClient.vaults()
+                    .then((vault) =>
+                      showSnackBar(
+                        `${folderName}: ${vault.jobs || 0} verified jobs, ${vault.bytes || 0} bytes.`,
+                      ),
+                    )
+                    .catch((error) =>
+                      showSnackBar(
+                        `Vault unavailable: ${error?.message || error}`,
+                      ),
+                    );
                   setIsDrawerOpen(false);
                 }}
                 historyItems={historyItems}

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { GolemHoloLogo } from './GolemHoloLogo';
+import { ComputeNodePanel } from './ComputeNodePanel';
 import { AppLanguage, StorageFolder, SynthesisHistoryItem } from '../types';
 import { 
   Folder, 
@@ -107,7 +108,7 @@ export const GolemDrawer: React.FC<GolemDrawerProps> = ({
       reaccessBtn: 'RE-ACCESS IN CHAT',
       inspectBtn: 'INSPECT TELEMETRY',
       collapseBtn: 'HIDE TELEMETRY',
-      copyJsonBtn: 'COPY FLUTTER JSON',
+      copyJsonBtn: 'COPY ASSET JSON',
       copiedJson: 'COPIED JSON',
       emptyHistory: 'No synthesized models found.',
       totalCount: 'Synthesized Assets',
@@ -137,7 +138,7 @@ export const GolemDrawer: React.FC<GolemDrawerProps> = ({
       reaccessBtn: 'ОТКРЫТЬ В ЧАТЕ',
       inspectBtn: 'ТЕЛЕМЕТРИЯ СЕТКИ',
       collapseBtn: 'СВЕРНУТЬ ДЕТАЛИ',
-      copyJsonBtn: 'FLUTTER JSON',
+      copyJsonBtn: 'ASSET JSON',
       copiedJson: 'СКОПИРОВАНО',
       emptyHistory: 'Сгенерированных моделей не найдено.',
       totalCount: '3D-активов в памяти',
@@ -167,7 +168,7 @@ export const GolemDrawer: React.FC<GolemDrawerProps> = ({
       reaccessBtn: 'IM CHAT ÖFFNEN',
       inspectBtn: 'TELEMETRIE ANZEIGEN',
       collapseBtn: 'DETAILS EINKLAPPEN',
-      copyJsonBtn: 'FLUTTER JSON',
+      copyJsonBtn: 'ASSET JSON',
       copiedJson: 'KOPIERT',
       emptyHistory: 'Keine 3D-Modelle gefunden.',
       totalCount: 'Generierte Modelle',
@@ -207,7 +208,7 @@ export const GolemDrawer: React.FC<GolemDrawerProps> = ({
         active_locale: currentLanguage,
         diagnostic_status: 'OPTIMAL // INTEGRITY_VERIFIED',
         runtime_environment: {
-          platform: 'WebGL2 / Three.js Procedural Tessellator',
+          platform: 'GOLEM UI + MAKSIMAR 3D/CAD Organ',
           viewport_raster: 'Hardware-accelerated PBR + Wireframe Projection',
           geometry_pipeline: 'Draco L7 Quantization Decompressor',
           max_texture_resolution: '4096 x 4096',
@@ -217,7 +218,7 @@ export const GolemDrawer: React.FC<GolemDrawerProps> = ({
         total_synthesis_events: historyItems.length,
         cumulative_polygons: totalPolygons,
         cumulative_vertices: totalVertices,
-        compression_profile: 'Google Draco Geometry L7 Mesh Quantization',
+        compression_profile: 'Provider evidence + SHA256 provenance',
         formats_supported: ['GLB', 'USDZ', 'OBJ'],
         average_mesh_density: '32.1 tris/cm²',
       },
@@ -493,6 +494,8 @@ export const GolemDrawer: React.FC<GolemDrawerProps> = ({
                   </div>
                 </div>
               </div>
+
+              <ComputeNodePanel />
 
               {/* Memory / Storage Section */}
               <div>
@@ -818,7 +821,7 @@ export const GolemDrawer: React.FC<GolemDrawerProps> = ({
                                   ? 'bg-emerald-900/60 border-emerald-400 text-emerald-300'
                                   : 'bg-slate-800 hover:bg-slate-700 text-cyan-300 border-cyan-500/40'
                               }`}
-                              title="Copy Flutter JSON telemetry block"
+                              title="Copy verified asset telemetry JSON"
                             >
                               {isCopied ? <Check className="w-2.5 h-2.5 text-emerald-400" /> : <Code2 className="w-2.5 h-2.5" />}
                               <span>{isCopied ? t.copiedJson : 'JSON'}</span>

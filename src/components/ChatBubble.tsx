@@ -45,6 +45,21 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({ message, onOpenComparato
             {isGolem ? 'GOLEM // GUARDIAN' : 'OPERATOR'}
           </span>
           <span className="text-slate-500 text-[10px]">{message.timestamp}</span>
+          {isGolem && message.source && (
+            <span className={`text-[8px] px-1 py-0.5 border font-mono ${
+              message.source === 'local_llm_grounded'
+                ? 'text-violet-300 border-violet-500/40 bg-violet-950/30'
+                : message.source === 'local_llm'
+                ? 'text-cyan-300 border-cyan-500/30'
+                : 'text-emerald-300 border-emerald-500/30'
+            }`}>
+              {message.source === 'local_llm_grounded'
+                ? 'LOCAL LLM + CANONICAL FACTS'
+                : message.source === 'local_llm'
+                ? 'LOCAL LLM'
+                : message.source.toUpperCase()}
+            </span>
+          )}
         </div>
 
         {/* Attached Photo preview */}
@@ -74,6 +89,11 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({ message, onOpenComparato
           <div>
             <ModelViewer3D
               modelName={message.modelDetails?.name}
+              modelUrl={message.modelAsset?.glbUrl}
+              downloadUrl={message.modelAsset?.downloadUrl}
+              provider={message.modelAsset?.provider}
+              sha256={message.modelAsset?.sha256}
+              effectStatus={message.modelAsset?.effectStatus}
               vertices={message.modelDetails?.vertices}
               polygons={message.modelDetails?.polygons}
               renderTime={message.modelDetails?.renderTime}
@@ -85,6 +105,15 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({ message, onOpenComparato
               drawCalls={message.modelDetails?.drawCalls}
               materialCount={message.modelDetails?.materialCount}
               dracoCompression={message.modelDetails?.dracoCompression}
+              characterName={message.modelDetails?.characterName}
+              species={message.modelDetails?.species}
+              profileId={message.modelDetails?.profileId}
+              variantOf={message.modelDetails?.variantOf}
+              modifiers={message.modelDetails?.modifiers}
+              modularParts={message.modelDetails?.modularParts}
+              tailSegments={message.modelDetails?.tailSegments}
+              backSpines={message.modelDetails?.backSpines}
+              rigPresent={message.modelDetails?.rigPresent}
               onOpenComparator={onOpenComparator ? () => onOpenComparator(message.id) : undefined}
             />
             {message.text && (
