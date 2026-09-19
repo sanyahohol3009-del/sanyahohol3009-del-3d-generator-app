@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Rajdhani', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    letter-spacing: 0.02em;
+    background-color: #030712;
+    color: #e2e8f0;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .font-display {
+    font-family: 'Chakra Petch', 'Rajdhani', sans-serif;
+  }
+}
+
+/* Faceted Crystalline Clip Paths */
+.clip-faceted-sm {
+  clip-path: polygon(
+    8px 0%, 
+    calc(100% - 8px) 0%, 
+    100% 8px, 
+    100% calc(100% - 8px), 
+    calc(100% - 8px) 100%, 
+    8px 100%, 
+    0% calc(100% - 8px), 
+    0% 8px
+  );
+}
+
+.clip-faceted-lg {
+  clip-path: polygon(
+    14px 0%, 
+    calc(100% - 14px) 0%, 
+    100% 14px, 
+    100% calc(100% - 14px), 
+    calc(100% - 14px) 100%, 
+    14px 100%, 
+    0% calc(100% - 14px), 
+    0% 14px
+  );
+}
+
+.clip-faceted-corner {
+  clip-path: polygon(
+    0 0,
+    calc(100% - 16px) 0,
+    100% 16px,
+    100% 100%,
+    16px 100%,
+    0 calc(100% - 16px)
+  );
+}
+
+/* High-tech HUD Scanlines */
+.scanlines-overlay {
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%, 
+    rgba(0, 240, 255, 0.04) 50%
+  ), linear-gradient(
+    90deg,
+    rgba(255, 0, 0, 0.01),
+    rgba(0, 255, 0, 0.005),
+    rgba(0, 0, 255, 0.01)
+  );
+  background-size: 100% 4px, 6px 100%;
+  pointer-events: none;
+}
+
+/* Subtle glowing pulse */
+@keyframes neonGlow {
+  0%, 100% {
+    filter: drop-shadow(0 0 6px rgba(0, 229, 255, 0.45)) drop-shadow(0 0 15px rgba(0, 140, 255, 0.2));
+  }
+  50% {
+    filter: drop-shadow(0 0 12px rgba(0, 229, 255, 0.75)) drop-shadow(0 0 25px rgba(0, 140, 255, 0.4));
+  }
+}
+
+.animate-neon-glow {
+  animation: neonGlow 3s ease-in-out infinite;
+}
+
+/* Custom Scrollbar for code and messages */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(8, 14, 26, 0.8);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 229, 255, 0.25);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 229, 255, 0.5);
+}

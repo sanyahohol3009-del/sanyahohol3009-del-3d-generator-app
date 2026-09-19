@@ -1,0 +1,6 @@
+{
+  "name": "GOLEM - AI 3D Generator Companion",
+  "description": "High-tech cyberpunk holographic UI and Flutter architectural code structure for GOLEM, the 3D-generator stone guardian companion.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
