@@ -15,6 +15,15 @@ export interface ModelDetails {
   materialCount?: number;
   rigged?: boolean;
   dracoCompression?: string;
+  characterName?: string;
+  species?: string;
+  profileId?: string;
+  variantOf?: string;
+  modifiers?: string[];
+  modularParts?: number;
+  tailSegments?: number;
+  backSpines?: number;
+  rigPresent?: boolean;
 }
 
 export type SynthesisStage = 'ingestion' | 'mesh_synthesis' | 'complete';
@@ -29,14 +38,53 @@ export interface SynthesisProgressData {
   vertices?: number;
 }
 
+export interface ModelArtifactRef {
+  jobId: string;
+  provider: string;
+  glbUrl?: string;
+  downloadUrl?: string;
+  sha256?: string;
+  effectStatus?: string;
+}
+
+export interface VisionMeasurement {
+  schema: string;
+  measurement_id: string;
+  status: string;
+  mode: string;
+  marker: {
+    id: number;
+    size_mm: number;
+    dictionary?: string;
+  };
+  object: {
+    width_mm: number;
+    height_mm: number;
+    area_mm2?: number;
+    angle_deg?: number;
+    shape_hint?: string;
+    aspect_ratio?: number;
+  };
+  confidence: number;
+  evidence: {
+    verified: boolean;
+    checks?: Record<string, boolean>;
+    opencv_version?: string;
+  };
+  annotated_data_url?: string;
+}
+
 export interface ChatMessage {
   id: string;
   sender: MessageSender;
   text: string;
   timestamp: string;
+  source?: string;
   is3DModel?: boolean;
   modelDetails?: ModelDetails;
+  modelAsset?: ModelArtifactRef;
   attachedImage?: string;
+  visionMeasurement?: VisionMeasurement;
   isSynthesizing?: boolean;
   synthesisProgress?: SynthesisProgressData;
 }
@@ -48,6 +96,7 @@ export interface SynthesisHistoryItem {
   timestamp: string;
   promptSnippet?: string;
   modelDetails: ModelDetails;
+  modelAsset?: ModelArtifactRef;
 }
 
 export type AppLanguage = 'en' | 'ru' | 'de';
@@ -71,3 +120,5 @@ export interface FlutterCodeFile {
   description: string;
   code: string;
 }
+
+export * from './types/vision';

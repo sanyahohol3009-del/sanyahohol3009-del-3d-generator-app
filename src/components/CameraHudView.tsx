@@ -1,270 +1,387 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { Camera, ArrowLeft, RefreshCw, Crosshair, Sparkles, Shield, Compass } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import {
+  Camera,
+  X,
+  ArrowLeft,
+  RotateCw,
+  AlertTriangle,
+  RefreshCw,
+  FolderOpen,
+  CheckCircle2,
+  DraftingCompass,
+} from 'lucide-react';
+import { VisionCameraMode } from '../types/vision';
+import { useCameraLifecycle } from '../hooks/useCameraLifecycle';
+import { VisionToolSelector } from './VisionToolSelector';
+import { VisionStatusOverlay, BackendGuidanceState } from './VisionStatusOverlay';
+import { VisionObjectOverlay } from './VisionObjectOverlay';
+import { ObjectCaptureHud } from './ObjectCaptureHud';
+import { DrawingReviewPanel } from './DrawingReviewPanel';
+import { useI18n } from '../i18n';
 
 interface CameraHudViewProps {
   isOpen: boolean;
   onClose: () => void;
-  onCapture: (imageDataUrl: string) => void;
+  onCapture: (imageDataUrl: string, mode: VisionCameraMode) => void;
+  initialMode?: VisionCameraMode;
 }
 
 export const CameraHudView: React.FC<CameraHudViewProps> = ({
   isOpen,
   onClose,
   onCapture,
+  initialMode = 'auto',
 }) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  const [useRealCamera, setUseRealCamera] = useState(false);
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [simulatedMeshAngle, setSimulatedMeshAngle] = useState(0);
+  const { t } = useI18n();
+  const [currentMode, setCurrentMode] = useState<VisionCameraMode>(initialMode);
+  const [isCapturingFlash, setIsCapturingFlash] = useState(false);
+  const [guidanceState, setGuidanceState] = useState<BackendGuidanceState>('SEARCHING_FOR_SCALE');
+  const [showDrawingReview, setShowDrawingReview] = useState(false);
+  const [lastCapturedImage, setLastCapturedImage] = useState<string | null>(null);
 
-  // Initialize camera or fallback
+  const {
+    state: cameraState,
+    errorCode,
+    errorMessage,
+    videoRef,
+    openCamera,
+    closeCamera,
+    retryCamera,
+    switchFacingMode,
+    captureFrame,
+  } = useCameraLifecycle({
+    idealFacingMode: 'environment',
+  });
+
+  // Open camera on modal open; close on modal close
   useEffect(() => {
-    if (!isOpen) {
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-        setStream(null);
-      }
-      return;
+    if (isOpen) {
+      setCurrentMode(initialMode);
+      setShowDrawingReview(false);
+      setLastCapturedImage(null);
+      void openCamera();
+    } else {
+      closeCamera();
     }
-
-    let isMounted = true;
-
-    async function initCamera() {
-      try {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          const mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-            audio: false,
-          });
-          if (!isMounted) {
-            mediaStream.getTracks().forEach((t) => t.stop());
-            return;
-          }
-          setStream(mediaStream);
-          setUseRealCamera(true);
-          if (videoRef.current) {
-            videoRef.current.srcObject = mediaStream;
-          }
-        }
-      } catch (err) {
-        console.log('Webcam access optional or denied in sandbox; utilizing HUD simulation matrix:', err);
-        setUseRealCamera(false);
-      }
-    }
-
-    initCamera();
-
-    return () => {
-      isMounted = false;
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-      }
-    };
-  }, [isOpen]);
-
-  // Simulated scan animation if real camera not available
-  useEffect(() => {
-    if (!isOpen || useRealCamera) return;
-    const interval = setInterval(() => {
-      setSimulatedMeshAngle((prev) => (prev + 2) % 360);
-    }, 50);
-    return () => clearInterval(interval);
-  }, [isOpen, useRealCamera]);
+  }, [isOpen, initialMode, openCamera, closeCamera]);
 
   if (!isOpen) return null;
 
-  const handleCapture = () => {
-    setIsCapturing(true);
+  const handleCapture = async () => {
+    if (cameraState !== 'live') return;
 
-    setTimeout(() => {
-      let dataUrl = '';
-      if (videoRef.current && useRealCamera) {
-        const video = videoRef.current;
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          // Apply a subtle cyberpunk HUD tint to the captured image
-          ctx.strokeStyle = '#00f0ff';
-          ctx.lineWidth = 4;
-          ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
-          dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        }
+    setIsCapturingFlash(true);
+    const dataUrl = await captureFrame();
+    setTimeout(() => setIsCapturingFlash(false), 300);
+
+    if (dataUrl) {
+      if (currentMode === 'drawing') {
+        setLastCapturedImage(dataUrl);
+        setShowDrawingReview(true);
+      } else {
+        onCapture(dataUrl, currentMode);
+        onClose();
       }
+    }
+  };
 
-      // If simulated camera, generate a high-tech synthesized scan thumbnail
-      if (!dataUrl) {
-        const simCanvas = document.createElement('canvas');
-        simCanvas.width = 400;
-        simCanvas.height = 300;
-        const sCtx = simCanvas.getContext('2d');
-        if (sCtx) {
-          sCtx.fillStyle = '#030712';
-          sCtx.fillRect(0, 0, 400, 300);
-
-          // Draw neon geometric target
-          sCtx.strokeStyle = '#00f0ff';
-          sCtx.lineWidth = 2;
-          sCtx.strokeRect(30, 30, 340, 240);
-
-          sCtx.beginPath();
-          sCtx.arc(200, 150, 60, 0, Math.PI * 2);
-          sCtx.stroke();
-
-          sCtx.beginPath();
-          sCtx.moveTo(140, 150);
-          sCtx.lineTo(260, 150);
-          sCtx.moveTo(200, 90);
-          sCtx.lineTo(200, 210);
-          sCtx.stroke();
-
-          sCtx.fillStyle = '#00f0ff';
-          sCtx.font = '14px monospace';
-          sCtx.fillText('GOLEM // HUD SPATIAL SCAN', 40, 60);
-          sCtx.fillStyle = '#38bdf8';
-          sCtx.font = '11px monospace';
-          sCtx.fillText('LAT: 52.5200 // LNG: 13.4050 // FOV: 84°', 40, 250);
-
-          dataUrl = simCanvas.toDataURL('image/jpeg');
-        }
+  const handleChoosePhotoFallback = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const url = String(reader.result || '');
+          if (url) {
+            if (currentMode === 'drawing') {
+              setLastCapturedImage(url);
+              setShowDrawingReview(true);
+            } else {
+              onCapture(url, currentMode);
+              onClose();
+            }
+          }
+        };
+        reader.readAsDataURL(file);
       }
+    });
+    input.click();
+  };
 
-      setIsCapturing(false);
-      onCapture(dataUrl);
-      onClose();
-    }, 350);
+  const getErrorDescription = () => {
+    switch (errorCode) {
+      case 'permission_denied':
+        return t.cameraPermissionDenied;
+      case 'not_found':
+        return t.cameraNotFound;
+      case 'in_use':
+        return t.cameraInUse;
+      case 'interrupted':
+        return t.cameraInterrupted;
+      case 'unsupported':
+        return t.cameraUnsupported;
+      default:
+        return errorMessage || t.cameraUnknownError;
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black flex flex-col justify-between overflow-hidden select-none">
-      {/* 1. Camera Viewfinder or Simulated HUD Matrix */}
-      <div className="absolute inset-0 z-0 bg-slate-950 flex items-center justify-center">
-        {useRealCamera ? (
+    <div className="fixed inset-0 z-50 bg-black flex flex-col overflow-hidden select-none">
+      {/* Top HUD Navigation Bar - Always visible across ALL camera modes, states, and panels */}
+      <header className="relative z-40 bg-slate-950/95 backdrop-blur-md border-b border-cyan-500/40 px-3 sm:px-4 py-2 flex items-center justify-between gap-2 shrink-0 select-none shadow-[0_4px_20px_rgba(0,0,0,0.8)] pointer-events-auto">
+        {/* Left: Prominent Back to Chat Button */}
+        <div className="flex items-center gap-2">
+          <button
+            id="camera-back-btn"
+            data-testid="camera-back-btn"
+            onClick={onClose}
+            className="flex items-center gap-2 px-3.5 py-1.5 bg-cyan-950/90 hover:bg-cyan-900/90 border-2 border-cyan-400 hover:border-cyan-300 text-cyan-300 hover:text-white clip-faceted-sm transition-all cursor-pointer shadow-[0_0_15px_rgba(0,240,255,0.35)] group active:scale-95"
+            title={t.cameraBackToChat}
+            aria-label={`${t.cameraBackToChat} / Back to chat`}
+          >
+            <ArrowLeft className="w-4 h-4 text-cyan-400 group-hover:-translate-x-0.5 transition-transform" />
+            <span className="font-mono text-xs font-bold tracking-wider">{t.cameraBackToChat}</span>
+          </button>
+          {/* Alias hidden trigger for legacy or alternate id queries */}
+          <button
+            id="camera-back-to-chat-btn"
+            onClick={onClose}
+            tabIndex={-1}
+            aria-hidden="true"
+            className="sr-only"
+          />
+
+          {cameraState === 'live' && !showDrawingReview && (
+            <button
+              onClick={() => void switchFacingMode()}
+              className="p-1.5 bg-black/85 border border-cyan-500/40 text-cyan-300 hover:text-white clip-faceted-sm transition-colors cursor-pointer"
+              title={t.cameraSwitchFacingBtn}
+            >
+              <RotateCw className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {/* Center: Mode Selector or Review Title */}
+        {!showDrawingReview ? (
+          <VisionToolSelector
+            currentMode={currentMode}
+            onSelectMode={(mode) => setCurrentMode(mode)}
+            disabled={cameraState !== 'live'}
+          />
+        ) : (
+          <div className="flex items-center gap-2 font-mono text-xs font-bold text-cyan-300">
+            <DraftingCompass className="w-4 h-4 text-cyan-400" />
+            <span>{t.drawingReviewHeader}</span>
+          </div>
+        )}
+
+        {/* Right: Telemetry & Close */}
+        <div className="flex items-center gap-2">
+          <div className="hidden sm:flex items-center gap-2 font-mono text-[10px] text-cyan-300 bg-black/85 px-2.5 py-1 border border-cyan-500/40 clip-faceted-sm">
+            <span className={`w-2 h-2 rounded-full ${cameraState === 'live' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+            <span>{cameraState === 'live' ? t.cameraSensorReady : cameraState.toUpperCase()}</span>
+          </div>
+
+          <button
+            id="camera-close-icon-btn"
+            onClick={onClose}
+            className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-950/40 border border-transparent hover:border-red-500/40 clip-faceted-sm transition-colors cursor-pointer"
+            title={t.cameraBackToChat}
+            aria-label="Close camera"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+      </header>
+
+      {/* Main Viewport Container */}
+      <div className="relative flex-1 flex flex-col overflow-hidden bg-slate-950">
+        {/* Raw Optical Video Viewport (Background) */}
+        <div className="absolute inset-0 z-0 flex items-center justify-center overflow-hidden bg-slate-950">
           <video
             ref={videoRef}
             autoPlay
             playsInline
             muted
-            className="w-full h-full object-cover"
+            className={`w-full h-full object-cover transition-opacity duration-300 ${
+              cameraState === 'live' ? 'opacity-100' : 'opacity-0 pointer-events-none'
+            }`}
           />
-        ) : (
-          <div className="relative w-full h-full bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black flex flex-col items-center justify-center text-cyan-400">
-            {/* Holographic Wireframe Grid */}
-            <div className="absolute inset-0 bg-[linear-gradient(to_right,#00f0ff0d_1px,transparent_1px),linear-gradient(to_bottom,#00f0ff0d_1px,transparent_1px)] bg-[size:40px_40px]" />
 
-            {/* Rotating Monolith Object Simulation */}
-            <div 
-              className="relative w-48 h-48 border-2 border-cyan-400/50 clip-faceted-sm flex items-center justify-center shadow-[0_0_30px_rgba(0,240,255,0.2)] transition-transform"
-              style={{ transform: `rotate(${simulatedMeshAngle * 0.5}deg)` }}
-            >
-              <div 
-                className="w-32 h-32 border border-sky-400/60 clip-faceted-corner flex items-center justify-center"
-                style={{ transform: `rotate(-${simulatedMeshAngle}deg)` }}
+          {/* Camera Opening State */}
+          {cameraState === 'opening' && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-cyan-400 font-mono z-10">
+              <RefreshCw className="w-8 h-8 animate-spin text-cyan-400" />
+              <div className="text-xs font-semibold tracking-wider bg-black/80 px-3 py-1 border border-cyan-500/40 clip-faceted-sm">
+                {t.cameraOpening}
+              </div>
+              <button
+                id="camera-opening-back-to-chat-btn"
+                onClick={onClose}
+                className="mt-2 flex items-center gap-2 px-4 py-1.5 bg-black/90 hover:bg-cyan-950 border border-cyan-500/60 hover:border-cyan-400 text-cyan-300 hover:text-white text-xs font-mono clip-faceted-sm transition-all cursor-pointer shadow-[0_0_10px_rgba(0,240,255,0.2)]"
               >
-                <div className="w-16 h-16 border border-cyan-300 bg-cyan-950/40 flex items-center justify-center">
-                  <Shield className="w-8 h-8 text-cyan-300 animate-pulse" />
-                </div>
-              </div>
+                <ArrowLeft className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{t.cameraBackToChat}</span>
+              </button>
             </div>
+          )}
 
-            <div className="mt-8 text-center font-mono z-10 px-4">
-              <div className="text-sm font-bold tracking-[0.2em] text-cyan-300 flex items-center justify-center gap-2">
-                <Sparkles className="w-4 h-4 text-cyan-400 animate-spin" />
-                OPTICAL SENSOR MATRIX // STANDBY
+          {/* Camera Error / Permission Denied State */}
+          {cameraState === 'error' && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6 text-slate-100 font-mono max-w-md mx-auto text-center z-10">
+              <div className="w-14 h-14 rounded-full bg-red-950/60 border border-red-500 flex items-center justify-center shadow-[0_0_20px_rgba(239,68,68,0.3)]">
+                <AlertTriangle className="w-7 h-7 text-red-400" />
               </div>
-              <p className="text-xs text-slate-400 mt-1 max-w-sm">
-                Target subject for 3D point-cloud extraction and neural mesh reconstruction
-              </p>
+
+              <div className="space-y-1">
+                <div className="text-sm font-bold text-red-400 tracking-wider">
+                  {t.cameraError}
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {getErrorDescription()}
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full pt-2">
+                <button
+                  onClick={() => retryCamera()}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-black text-xs font-bold clip-faceted-sm transition-all cursor-pointer shadow-[0_0_12px_rgba(0,240,255,0.3)]"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>{t.cameraRetryBtn}</span>
+                </button>
+
+                <button
+                  onClick={handleChoosePhotoFallback}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-cyan-400 text-cyan-300 text-xs font-bold clip-faceted-sm transition-all cursor-pointer"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  <span>{t.cameraChoosePhotoBtn}</span>
+                </button>
+              </div>
+
+              <button
+                id="camera-error-back-to-chat-btn"
+                onClick={onClose}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-950 hover:bg-cyan-950 border border-cyan-500/60 hover:border-cyan-400 text-cyan-300 hover:text-white text-xs font-bold clip-faceted-sm transition-all cursor-pointer shadow-[0_0_10px_rgba(0,240,255,0.2)]"
+              >
+                <ArrowLeft className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{t.cameraBackToChat}</span>
+              </button>
             </div>
+          )}
+
+          {/* Scanlines Effect */}
+          {cameraState === 'live' && (
+            <div className="scanlines-overlay absolute inset-0 z-10 pointer-events-none opacity-40" />
+          )}
+        </div>
+
+        {/* 2. Mode Overlay: Drawing Review Panel */}
+        {showDrawingReview && (
+          <div className="relative z-30 flex-1 overflow-y-auto bg-slate-950">
+            <DrawingReviewPanel
+              initialImageUrl={lastCapturedImage || undefined}
+              onConfirmDimensions={(dims, targetCad) => {
+                if (lastCapturedImage) {
+                  onCapture(lastCapturedImage, 'drawing');
+                }
+                onClose();
+              }}
+              onDiscard={() => setShowDrawingReview(false)}
+              onBackToChat={onClose}
+            />
           </div>
         )}
 
-        {/* Scanline Sweep Effect */}
-        <div className="scanlines-overlay absolute inset-0 z-10" />
+        {/* 3. Interactive HUD Overlays (Display only, never burned into image) */}
+        {!showDrawingReview && (
+          <div className="relative z-20 flex-1 flex flex-col justify-between p-3 sm:p-5 pointer-events-none">
+            {/* Center Mode Content */}
+            <div className="relative flex-1 flex flex-col items-center justify-center my-2 pointer-events-none">
+              {/* Object Capture Mode Shell */}
+              {currentMode === 'capture' && (
+                <ObjectCaptureHud
+                  onCaptureAngleSnapshot={handleCapture}
+                  onFinishReconstructionSequence={(count) => {
+                    void handleCapture();
+                  }}
+                />
+              )}
 
-        {/* Horizontal Laser Scanning Beam */}
-        <div className="absolute inset-x-0 h-1 bg-gradient-to-r from-transparent via-cyan-400 to-transparent opacity-75 animate-bounce z-15 pointer-events-none" />
-      </div>
+              {/* Measure / Auto / Drawing Viewfinder */}
+              {currentMode !== 'capture' && cameraState === 'live' && (
+                <>
+                  {/* Status Guidance Overlay */}
+                  <div className="absolute top-2">
+                    <VisionStatusOverlay
+                      guidanceState={guidanceState}
+                      scaleProvider="aruco"
+                    />
+                  </div>
 
-      {/* 2. Custom HUD Overlay (Crosshairs, Brackets & Telemetry) */}
-      <div className="relative z-20 flex-1 flex flex-col justify-between p-4 sm:p-6 pointer-events-none">
-        {/* Top HUD Bar */}
-        <div className="flex items-center justify-between pointer-events-auto">
-          <button
-            onClick={onClose}
-            className="flex items-center gap-2 px-3 py-1.5 bg-slate-950/90 border border-cyan-500/70 text-cyan-400 clip-faceted-sm hover:bg-cyan-950 transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span className="font-mono text-xs font-semibold">EXIT HUD</span>
-          </button>
+                  {/* Interactive Object Bounding Box / Tap-to-select overlay */}
+                  <VisionObjectOverlay
+                    onLockChange={(locked, bbox) => {
+                      setGuidanceState(locked ? 'OBJECT_LOCKED' : bbox ? 'OBJECT_CANDIDATE' : 'SEARCHING_FOR_OBJECT');
+                    }}
+                  />
 
-          <div className="flex items-center gap-3 font-mono text-[11px] text-cyan-300 bg-black/80 px-3 py-1.5 border border-cyan-500/40 clip-faceted-sm">
-            <span className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-              SENSORS: LOCK
-            </span>
-            <span>•</span>
-            <span>FOV 84°</span>
-            <span>•</span>
-            <span>60 FPS</span>
-          </div>
-        </div>
+                  {/* Central Targeting Reticle */}
+                  <div className="relative w-64 h-64 sm:w-72 sm:h-72 border border-cyan-400/30 rounded-full flex items-center justify-center pointer-events-none">
+                    {/* Corner Framing Brackets */}
+                    <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-cyan-400" />
+                    <div className="absolute top-0 right-0 w-8 h-8 border-t-2 border-r-2 border-cyan-400" />
+                    <div className="absolute bottom-0 left-0 w-8 h-8 border-b-2 border-l-2 border-cyan-400" />
+                    <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-cyan-400" />
 
-        {/* Center Crosshairs & Targeting Brackets */}
-        <div className="relative flex items-center justify-center pointer-events-none">
-          {/* Outer Crosshair Ring */}
-          <div className="relative w-64 h-64 sm:w-72 sm:h-72 border border-cyan-400/30 rounded-full flex items-center justify-center">
-            {/* Inner Ring */}
-            <div className="w-36 h-36 border border-dashed border-cyan-400/50 rounded-full flex items-center justify-center" />
+                    {/* Reticle Lines */}
+                    <div className="absolute inset-x-0 h-px bg-cyan-400/30" />
+                    <div className="absolute inset-y-0 w-px bg-cyan-400/30" />
 
-            {/* Corner Framing Brackets */}
-            <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-cyan-400" />
-            <div className="absolute top-0 right-0 w-8 h-8 border-t-2 border-r-2 border-cyan-400" />
-            <div className="absolute bottom-0 left-0 w-8 h-8 border-b-2 border-l-2 border-cyan-400" />
-            <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-cyan-400" />
-
-            {/* Reticle Lines */}
-            <div className="absolute inset-x-0 h-px bg-cyan-400/30" />
-            <div className="absolute inset-y-0 w-px bg-cyan-400/30" />
-
-            {/* Center Target Dot */}
-            <div className="w-3 h-3 bg-cyan-400 clip-faceted-sm shadow-[0_0_10px_#00f0ff]" />
-          </div>
-
-          {/* Telemetry Labels around Crosshairs */}
-          <div className="absolute top-2 font-mono text-[10px] text-cyan-300/80 tracking-widest bg-black/70 px-2 py-0.5 border border-cyan-500/20">
-            PITCH: +14.2° // YAW: -03.8°
-          </div>
-        </div>
-
-        {/* Bottom Shutter Controls */}
-        <div className="flex flex-col items-center pb-2 pointer-events-auto">
-          <button
-            onClick={handleCapture}
-            disabled={isCapturing}
-            className="group relative flex items-center justify-center p-1 cursor-pointer transition-transform active:scale-95"
-          >
-            {/* Outer ring */}
-            <div className="w-20 h-20 rounded-full border-2 border-cyan-400 flex items-center justify-center group-hover:shadow-[0_0_25px_rgba(0,240,255,0.7)] transition-shadow">
-              {/* Inner Faceted Shutter Button */}
-              <div className="w-14 h-14 bg-cyan-400 clip-faceted-sm flex items-center justify-center group-hover:bg-cyan-300 transition-colors">
-                <Camera className="w-7 h-7 text-black" />
-              </div>
+                    {/* Center Target Dot */}
+                    <div className="w-2.5 h-2.5 bg-cyan-400 clip-faceted-sm shadow-[0_0_10px_#00f0ff]" />
+                  </div>
+                </>
+              )}
             </div>
-          </button>
 
-          <span className="font-mono text-xs font-bold text-cyan-300 tracking-[0.2em] mt-2 bg-black/80 px-3 py-0.5 border border-cyan-500/30 clip-faceted-sm">
-            {isCapturing ? 'ACQUIRING POINT-CLOUD...' : 'CAPTURE 3D SCAN'}
-          </span>
-        </div>
+            {/* Bottom Shutter Controls (Hidden in Object Capture mode because it provides its own step button) */}
+            {currentMode !== 'capture' && (
+              <div className="flex flex-col items-center pb-2 pointer-events-auto">
+                <button
+                  id="camera-shutter-btn"
+                  onClick={handleCapture}
+                  disabled={cameraState !== 'live'}
+                  className="group relative flex items-center justify-center p-1 cursor-pointer transition-transform active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title={t.cameraShutterLabel}
+                >
+                  <div className="w-18 h-18 rounded-full border-2 border-cyan-400 flex items-center justify-center group-hover:shadow-[0_0_25px_rgba(0,240,255,0.7)] transition-shadow">
+                    <div className="w-13 h-13 bg-cyan-400 clip-faceted-sm flex items-center justify-center group-hover:bg-cyan-300 transition-colors">
+                      <Camera className="w-6 h-6 text-black" />
+                    </div>
+                  </div>
+                </button>
+
+                <span className="font-mono text-[11px] font-bold text-cyan-300 tracking-[0.15em] mt-2 bg-black/85 px-3 py-0.5 border border-cyan-500/30 clip-faceted-sm">
+                  {cameraState !== 'live'
+                    ? t.cameraUnavailablePrompt
+                    : isCapturingFlash
+                    ? t.cameraShutterCapturing
+                    : t.cameraShutterLabel}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Shutter Flash effect */}
-      {isCapturing && (
+      {/* Shutter Flash Effect */}
+      {isCapturingFlash && (
         <div className="absolute inset-0 bg-cyan-200 z-50 animate-out fade-out duration-300 pointer-events-none" />
       )}
     </div>

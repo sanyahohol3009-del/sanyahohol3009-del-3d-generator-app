@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Cpu, Activity, Zap, HardDrive, Thermometer, Gauge, ChevronDown, RefreshCw, Check } from 'lucide-react';
+import { organClient } from '../services/organClient';
 
 export type SynthesisStageType =
   | 'idle'
@@ -30,77 +31,52 @@ export const VramComputeGauge: React.FC<VramComputeGaugeProps> = ({
   const [showTelemetryModal, setShowTelemetryModal] = useState<boolean>(false);
   const [flushedVram, setFlushedVram] = useState<boolean>(false);
 
-  // High frequency micro-fluctuations
-  const jitterTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [totalMemoryGb, setTotalMemoryGb] = useState<number>(1);
 
   useEffect(() => {
-    // Determine baseline targets from stage
-    let targetCompute = 14;
-    let targetVram = 2.3;
-    let targetTemp = 43;
+    let active = true;
 
-    if (isSynthesizing) {
-      if (synthesisProgress < 20 || synthesisStage === 'ingestion') {
-        targetCompute = 52;
-        targetVram = 6.2;
-        targetTemp = 54;
-      } else if (synthesisProgress < 36) {
-        targetCompute = 68;
-        targetVram = 8.4;
-        targetTemp = 59;
-      } else if (synthesisProgress < 50 || synthesisStage === 'voxelization') {
-        targetCompute = 82;
-        targetVram = 11.2;
-        targetTemp = 66;
-      } else if (synthesisProgress < 68 || synthesisStage === 'marching_cubes') {
-        targetCompute = 94; // Peak marching cubes load
-        targetVram = 13.8;
-        targetTemp = 74;
-      } else if (synthesisProgress < 85 || synthesisStage === 'baking') {
-        targetCompute = 98; // Peak 4K PBR shader baking
-        targetVram = 15.2;
-        targetTemp = 78;
-      } else if (synthesisProgress < 100 || synthesisStage === 'compression') {
-        targetCompute = 68;
-        targetVram = 10.4;
-        targetTemp = 68;
-      } else {
-        targetCompute = 35;
-        targetVram = 4.2;
-        targetTemp = 50;
+    const update = async () => {
+      try {
+        const payload = await organClient.telemetry();
+        if (!active) return;
+        const telemetry = payload?.telemetry || {};
+
+        const gpuUsed = Number(telemetry.gpu_memory_used_gb);
+        const gpuTotal = Number(telemetry.gpu_memory_total_gb);
+        const useGpu =
+          Number.isFinite(gpuUsed) &&
+          gpuUsed > 0 &&
+          Number.isFinite(gpuTotal) &&
+          gpuTotal > 0;
+
+        setVramGb(
+          useGpu
+            ? gpuUsed
+            : Number(telemetry.memory_used_gb || 0),
+        );
+        setTotalMemoryGb(
+          useGpu
+            ? gpuTotal
+            : Math.max(0.1, Number(telemetry.memory_total_gb || 1)),
+        );
+        setComputeLoad(Number(telemetry.load_percent || 0));
+
+        const temperature = Number(telemetry.temperature_c);
+        if (Number.isFinite(temperature)) {
+          setGpuTemp(temperature);
+        }
+      } catch {
+        // Preserve the last real sample. Never synthesize fake telemetry.
       }
-    }
+    };
 
-    if (jitterTimerRef.current) {
-      clearInterval(jitterTimerRef.current);
-    }
-
-    // Interval to create lively, realistic cyberpunk fluctuations
-    jitterTimerRef.current = setInterval(() => {
-      setComputeLoad(() => {
-        // Micro fluctuation between -2.2% and +2.5%
-        const jitter = (Math.random() - 0.48) * 4.5;
-        const next = Math.max(8, Math.min(99.4, targetCompute + jitter));
-        return parseFloat(next.toFixed(1));
-      });
-
-      setVramGb(() => {
-        // Micro fluctuation between -0.15 GB and +0.18 GB
-        const jitter = (Math.random() - 0.48) * 0.35;
-        const next = Math.max(1.8, Math.min(15.8, targetVram + jitter));
-        return parseFloat(next.toFixed(2));
-      });
-
-      setGpuTemp(() => {
-        const jitter = (Math.random() - 0.5) * 1.5;
-        return Math.round(targetTemp + jitter);
-      });
-    }, 280);
+    void update();
+    const timer = window.setInterval(() => void update(), 2500);
 
     return () => {
-      if (jitterTimerRef.current) {
-        clearInterval(jitterTimerRef.current);
-      }
+      active = false;
+      window.clearInterval(timer);
     };
   }, [isSynthesizing, synthesisProgress, synthesisStage]);
 
@@ -114,20 +90,20 @@ export const VramComputeGauge: React.FC<VramComputeGaugeProps> = ({
     ? 'text-amber-400'
     : 'text-cyan-300';
 
-  const vramPercent = Math.min(100, (vramGb / 16.0) * 100);
+  const vramPercent = Math.min(100, (vramGb / Math.max(0.1, totalMemoryGb)) * 100);
 
   // 8 Segmented bar units
   const totalSegments = 8;
   const activeSegments = Math.round((computeLoad / 100) * totalSegments);
 
-  const handleFlushVram = (e: React.MouseEvent) => {
+  const handleFlushVram = async (e: React.MouseEvent) => {
     e.stopPropagation();
     setFlushedVram(true);
-    setVramGb(2.1);
-    setComputeLoad(12);
-    setTimeout(() => {
-      setFlushedVram(false);
-    }, 1800);
+    try {
+      await organClient.purgeCache();
+    } finally {
+      window.setTimeout(() => setFlushedVram(false), 1800);
+    }
   };
 
   return (
@@ -219,7 +195,7 @@ export const VramComputeGauge: React.FC<VramComputeGaugeProps> = ({
           <div className="flex items-center justify-between border-b border-cyan-500/30 pb-1.5 mb-2">
             <div className="flex items-center gap-1.5 text-cyan-300 font-bold tracking-wider">
               <Cpu className="w-3.5 h-3.5 text-cyan-400" />
-              <span>GPU // VRAM DIAGNOSTIC MATRIX</span>
+              <span>WORKER // MEMORY & COMPUTE DIAGNOSTICS</span>
             </div>
             <button
               onClick={() => setShowTelemetryModal(false)}
@@ -246,9 +222,9 @@ export const VramComputeGauge: React.FC<VramComputeGaugeProps> = ({
           {/* VRAM Progress Bar & Details */}
           <div className="space-y-1 mb-2.5">
             <div className="flex justify-between text-[9px]">
-              <span className="text-slate-400">Unified VRAM Usage</span>
+              <span className="text-slate-400">Worker Memory Usage</span>
               <span className="text-cyan-300 font-bold">
-                {vramGb.toFixed(2)} GB / 16.00 GB ({vramPercent.toFixed(0)}%)
+                {vramGb.toFixed(2)} GB / {totalMemoryGb.toFixed(2)} GB ({vramPercent.toFixed(0)}%)
               </span>
             </div>
             <div className="w-full h-2 bg-black border border-cyan-500/30 rounded-xs overflow-hidden p-0.2">
@@ -266,7 +242,7 @@ export const VramComputeGauge: React.FC<VramComputeGaugeProps> = ({
             <div className="flex justify-between text-[8px] text-slate-500">
               <span>0 GB</span>
               <span>8 GB</span>
-              <span>16 GB (Unified GDDR6X)</span>
+              <span>{totalMemoryGb.toFixed(1)} GB</span>
             </div>
           </div>
 
@@ -299,27 +275,9 @@ export const VramComputeGauge: React.FC<VramComputeGaugeProps> = ({
             </div>
           </div>
 
-          {/* Allocation Breakdown */}
           <div className="p-1.5 bg-black/80 border border-cyan-500/20 rounded-xs space-y-1 mb-2.5 text-[8.5px]">
-            <div className="text-slate-400 font-bold border-b border-cyan-500/10 pb-0.5 flex justify-between">
-              <span>BUFFER ALLOCATION</span>
-              <span>BYTES</span>
-            </div>
-            <div className="flex justify-between text-slate-300">
-              <span className="text-slate-400">• Geometry & Vertex Buffer:</span>
-              <span className="text-cyan-300 font-mono">{isSynthesizing ? '4.82 GB' : '0.62 GB'}</span>
-            </div>
-            <div className="flex justify-between text-slate-300">
-              <span className="text-slate-400">• 4K PBR Texture Cache:</span>
-              <span className="text-cyan-300 font-mono">{isSynthesizing ? '6.15 GB' : '0.94 GB'}</span>
-            </div>
-            <div className="flex justify-between text-slate-300">
-              <span className="text-slate-400">• 512³ Voxel Grid Tensor:</span>
-              <span className="text-cyan-300 font-mono">{isSynthesizing ? '3.42 GB' : '0.45 GB'}</span>
-            </div>
-            <div className="flex justify-between text-slate-300">
-              <span className="text-slate-400">• Draco L7 Compression Stream:</span>
-              <span className="text-cyan-300 font-mono">{isSynthesizing ? '0.81 GB' : '0.29 GB'}</span>
+            <div className="text-slate-400">
+              Telemetry is read from the active compute node. GPU VRAM is shown when the worker exposes it; otherwise GOLEM reports real system memory and process load.
             </div>
           </div>
 
@@ -337,12 +295,12 @@ export const VramComputeGauge: React.FC<VramComputeGaugeProps> = ({
             {flushedVram ? (
               <>
                 <Check className="w-3 h-3 text-emerald-400" />
-                <span>VRAM CACHE PURGED (13.9 GB FREED)</span>
+                <span>RUNTIME CACHE PURGED</span>
               </>
             ) : (
               <>
                 <RefreshCw className="w-3 h-3 text-cyan-400" />
-                <span>PURGE INTERMEDIATE VRAM CACHE</span>
+                <span>PURGE SAFE RUNTIME CACHE</span>
               </>
             )}
           </button>
