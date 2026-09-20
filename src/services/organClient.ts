@@ -215,6 +215,25 @@ export class OrganClient {
     );
   }
 
+  modifyCharacter(input: {
+    projectId: string;
+    versionId: string;
+    prompt: string;
+    maxTime?: number;
+  }) {
+    return this.request(
+      `/v1/projects/${encodeURIComponent(input.projectId)}/versions/${encodeURIComponent(input.versionId)}/modify`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          prompt: input.prompt,
+          max_time: input.maxTime ?? 240,
+        }),
+      },
+      true,
+    );
+  }
+
   projectArtifactUrl(
     projectId: string,
     versionId: string,

@@ -32,6 +32,9 @@ export function ProjectBrowser({ onClose }: ProjectBrowserProps) {
   const [version, setVersion] = useState<ProjectVersionRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [modifyPrompt, setModifyPrompt] = useState('');
+  const [modifyState, setModifyState] = useState('');
+  const [modifying, setModifying] = useState(false);
 
   const loadProject = async (projectId: string, preferredVersion?: string) => {
     setLoading(true);
@@ -87,6 +90,77 @@ export function ProjectBrowser({ onClose }: ProjectBrowserProps) {
   useEffect(() => {
     void refresh();
   }, []);
+
+  const modifySelected = async () => {
+    if (!project || !version) return;
+
+    const prompt = modifyPrompt.trim();
+    if (!prompt) {
+      setError('Describe the bounded change to the selected verified artifact.');
+      return;
+    }
+
+    setModifying(true);
+    setModifyState('SUBMITTING');
+    setError('');
+
+    try {
+      const submitted = await organClient.modifyCharacter({
+        projectId: project.project_id,
+        versionId: version.version_id,
+        prompt,
+        maxTime: 300,
+      });
+
+      const jobId = String(submitted?.job?.job_id || '');
+      if (!jobId) {
+        throw new Error('Modify endpoint returned no job id');
+      }
+
+      const result = await organClient.waitForResult(
+        jobId,
+        (state) => setModifyState(state.toUpperCase()),
+        360000,
+      );
+
+      if (result.status !== 'succeeded') {
+        throw new Error(
+          result.error_details
+          || result.error_code
+          || `Modify job ended as ${result.status}`,
+        );
+      }
+
+      const finalJob = await organClient.job(jobId);
+      const childVersion = String(
+        finalJob?.job?.project?.version_id || '',
+      );
+
+      if (!childVersion) {
+        throw new Error(
+          'Verified child artifact was not promoted to Project Store',
+        );
+      }
+
+      const projectList = await organClient.projects();
+      setProjects(
+        (projectList?.projects || []) as ProjectManifest[],
+      );
+
+      await loadProject(
+        project.project_id,
+        childVersion,
+      );
+
+      setModifyPrompt('');
+      setModifyState(`VERIFIED ${childVersion}`);
+    } catch (err: any) {
+      setError(err?.message || String(err));
+      setModifyState('FAILED');
+    } finally {
+      setModifying(false);
+    }
+  };
 
   const glb = useMemo(
     () => version?.artifacts?.find((item) => item.format === 'glb'),
@@ -304,10 +378,47 @@ export function ProjectBrowser({ onClose }: ProjectBrowserProps) {
                   )}
                 </div>
 
-                <div className="border border-amber-500/30 bg-amber-950/10 p-3 text-[9px] font-mono text-amber-200">
-                  USE AS BASE is intentionally disabled until true artifact-level
-                  design.character.modify consumes this exact parent artifact.
+                            <div className="border border-amber-500/30 bg-amber-950/10 p-3">
+              <div className="text-[9px] font-mono tracking-[0.16em] text-amber-300">
+                VERIFIED ARTIFACT MODIFY
+              </div>
+
+              <div className="mt-2 text-[9px] font-mono text-slate-400 break-all">
+                BASE {project.project_id}/{version.version_id}
+                {' · '}
+                SHA {blend?.sha256?.slice(0, 16) || 'n/a'}…
+              </div>
+
+              <textarea
+                value={modifyPrompt}
+                onChange={(event) => setModifyPrompt(event.target.value)}
+                placeholder="Example: Увеличь глаза и укороти морду"
+                className="mt-3 w-full min-h-[82px] bg-black border border-amber-500/30 p-2 font-mono text-xs text-slate-100 outline-none focus:border-cyan-400"
+                disabled={modifying}
+              />
+
+              <button
+                type="button"
+                onClick={() => void modifySelected()}
+                disabled={
+                  modifying
+                  || !blend
+                  || !version.verified
+                  || !modifyPrompt.trim()
+                }
+                className="mt-2 w-full h-11 border border-amber-400/60 text-amber-200 font-mono text-xs disabled:opacity-30 hover:bg-amber-950/30"
+              >
+                {modifying
+                  ? `MODIFYING VERIFIED BLEND · ${modifyState || 'RUNNING'}`
+                  : 'USE THIS VERIFIED BLEND AS BASE'}
+              </button>
+
+              {modifyState && !modifying && (
+                <div className="mt-2 text-[9px] font-mono text-emerald-300">
+                  {modifyState}
                 </div>
+              )}
+            </div>
               </div>
             ) : (
               <div className="h-full flex items-center justify-center font-mono text-slate-500 text-xs">
