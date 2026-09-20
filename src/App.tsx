@@ -16,7 +16,7 @@ import {
   Scale
 } from 'lucide-react';
 import { FolderKanban } from 'lucide-react';
-import { ChatMessage, AppLanguage, SynthesisHistoryItem } from './types';
+import { ChatMessage, AppLanguage, SynthesisHistoryItem, VisionMeasurement } from './types';
 import { GolemDrawer } from './components/GolemDrawer';
 import { ChatBubble } from './components/ChatBubble';
 import { ActionBottomSheet } from './components/ActionBottomSheet';
@@ -231,6 +231,8 @@ export default function App() {
 
   const [promptText, setPromptText] = useState('');
   const [attachedThumbnail, setAttachedThumbnail] = useState<string | null>(null);
+  const [attachedVision, setAttachedVision] = useState<VisionMeasurement | null>(null);
+  const [visionState, setVisionState] = useState<'idle' | 'analyzing' | 'measured' | 'reference'>('idle');
   const [snackBarMessage, setSnackBarMessage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -293,21 +295,68 @@ export default function App() {
     setIsComparatorOpen(true);
   };
 
+  const attachImageWithVision = async (
+    imageDataUrl: string,
+    sourceLabel: string,
+  ) => {
+    setAttachedThumbnail(imageDataUrl);
+    setAttachedVision(null);
+    setVisionState('analyzing');
+
+    showSnackBar(
+      `${sourceLabel} attached · GOLEM Vision checking ArUco metric plane...`,
+    );
+
+    try {
+      const payload = await organClient.visionMeasure({
+        imageDataUrl,
+        markerSizeMm: 50,
+        markerId: 0,
+      });
+
+      const measurement = payload?.measurement as VisionMeasurement | undefined;
+
+      if (measurement?.evidence?.verified) {
+        setAttachedVision(measurement);
+        setVisionState('measured');
+        showSnackBar(
+          `VISION VERIFIED · ${Number(measurement.object.width_mm).toFixed(1)} × ${Number(measurement.object.height_mm).toFixed(1)} mm · ${Math.round(Number(measurement.confidence) * 100)}%`,
+        );
+        return;
+      }
+    } catch {
+      // No ArUco / no clean contour: keep the image as a normal reference.
+    }
+
+    setVisionState('reference');
+    showSnackBar(
+      `${sourceLabel} attached as reference · no verified ArUco measurement.`,
+    );
+  };
+
   const handleSendMessage = async (overridePrompt?: string) => {
     const rawText = (overridePrompt ?? promptText).trim();
     if (!rawText && !attachedThumbnail) return;
     if (isSynthesizing) return;
 
-    const userMsgText = rawText || 'Analyze the attached reference without fabricating unavailable geometry.';
+    const userMsgText = rawText || (
+      attachedVision
+        ? 'Use the verified camera measurement as geometry input. Do not invent missing depth; ask for another view or dimension when required.'
+        : 'Analyze the attached reference without fabricating unavailable geometry.'
+    );
     const userMsg: ChatMessage = {
       id: Date.now().toString(), sender: 'user', text: userMsgText,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       attachedImage: attachedThumbnail || undefined,
+      visionMeasurement: attachedVision || undefined,
     };
     setMessages((prev) => [...prev, userMsg]);
     setPromptText('');
     const imageForRequest = attachedThumbnail || undefined;
+    const visionForRequest = attachedVision || undefined;
     setAttachedThumbnail(null);
+    setAttachedVision(null);
+    setVisionState('idle');
 
     const golemMsgId = (Date.now() + 1).toString();
     setMessages((prev) => [...prev, {
@@ -321,7 +370,12 @@ export default function App() {
     setIsSynthesizing(true); setSynthesisProgress(4); setSynthesisStage('ingestion');
 
     try {
-      const routed = await organClient.chat({ message: userMsgText, imageDataUrl: imageForRequest, maxTime: 180 });
+      const routed = await organClient.chat({
+        message: userMsgText,
+        imageDataUrl: imageForRequest,
+        visionMeasurementId: visionForRequest?.measurement_id,
+        maxTime: 180,
+      });
       if (routed?.kind === 'conversation' || routed?.kind === 'clarification') {
         const waiting = routed?.kind === 'clarification';
         setMessages((prev) => prev.map((msg) => msg.id === golemMsgId ? {
@@ -389,8 +443,10 @@ export default function App() {
         showSnackBar('Image is too large; maximum is 12 MB.');
         return;
       }
-      setAttachedThumbnail(await fileToDataUrl(file));
-      showSnackBar(`Photo attached: ${file.name}`);
+      await attachImageWithVision(
+        await fileToDataUrl(file),
+        `Photo ${file.name}`,
+      );
       return;
     }
 
@@ -413,9 +469,11 @@ export default function App() {
     setIsCameraOpen(true);
   };
 
-  const handleCameraCapture = (imageDataUrl: string) => {
-    setAttachedThumbnail(imageDataUrl);
-    showSnackBar('HUD Optical scan captured & attached to prompt bar.');
+  const handleCameraCapture = async (imageDataUrl: string) => {
+    await attachImageWithVision(
+      imageDataUrl,
+      'Vision camera frame',
+    );
   };
 
   return (
@@ -721,7 +779,11 @@ export default function App() {
                       </div>
                     </div>
                     <button
-                      onClick={() => setAttachedThumbnail(null)}
+                      onClick={() => {
+                        setAttachedThumbnail(null);
+                        setAttachedVision(null);
+                        setVisionState('idle');
+                      }}
                       className="p-1 text-slate-400 hover:text-red-400 transition-colors cursor-pointer"
                       title="Remove attachment"
                     >
@@ -753,6 +815,29 @@ export default function App() {
                     </button>
                   ))}
                 </div>
+
+                {attachedThumbnail && visionState !== 'idle' && (
+                  <div className="mb-2 px-2 py-1.5 border border-cyan-500/25 bg-black/70 font-mono text-[9px] flex items-center justify-between gap-2">
+                    <span className="text-slate-400">
+                      {visionState === 'analyzing'
+                        ? 'VISION ANALYZING · OPENCV / ARUCO'
+                        : visionState === 'measured' && attachedVision
+                        ? `VISION VERIFIED · ${Number(attachedVision.object.width_mm).toFixed(1)} × ${Number(attachedVision.object.height_mm).toFixed(1)} mm`
+                        : 'REFERENCE IMAGE · NO VERIFIED METRIC MARKER'}
+                    </span>
+                    <span className={
+                      visionState === 'measured'
+                        ? 'text-emerald-400'
+                        : visionState === 'analyzing'
+                        ? 'text-cyan-300'
+                        : 'text-amber-300'
+                    }>
+                      {visionState === 'measured' && attachedVision
+                        ? `${Math.round(Number(attachedVision.confidence) * 100)}%`
+                        : visionState.toUpperCase()}
+                    </span>
+                  </div>
+                )}
 
                 {/* Input Row: '+' Button, Input, Send */}
                 <div className="flex items-center gap-2">

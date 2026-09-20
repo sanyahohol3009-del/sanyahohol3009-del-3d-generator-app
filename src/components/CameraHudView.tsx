@@ -35,7 +35,7 @@ export const CameraHudView: React.FC<CameraHudViewProps> = ({
       try {
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
           const mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+            video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
             audio: false,
           });
           if (!isMounted) {
@@ -76,67 +76,47 @@ export const CameraHudView: React.FC<CameraHudViewProps> = ({
   if (!isOpen) return null;
 
   const handleCapture = () => {
+    if (
+      isCapturing
+      || !useRealCamera
+      || !videoRef.current
+    ) {
+      return;
+    }
+
     setIsCapturing(true);
 
-    setTimeout(() => {
-      let dataUrl = '';
-      if (videoRef.current && useRealCamera) {
-        const video = videoRef.current;
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          // Apply a subtle cyberpunk HUD tint to the captured image
-          ctx.strokeStyle = '#00f0ff';
-          ctx.lineWidth = 4;
-          ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
-          dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        }
+    try {
+      const video = videoRef.current;
+      const canvas = document.createElement('canvas');
+
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 720;
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Camera canvas is unavailable');
       }
 
-      // If simulated camera, generate a high-tech synthesized scan thumbnail
-      if (!dataUrl) {
-        const simCanvas = document.createElement('canvas');
-        simCanvas.width = 400;
-        simCanvas.height = 300;
-        const sCtx = simCanvas.getContext('2d');
-        if (sCtx) {
-          sCtx.fillStyle = '#030712';
-          sCtx.fillRect(0, 0, 400, 300);
+      // Raw pixels only: display HUD graphics are never burned into CV evidence.
+      ctx.drawImage(
+        video,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+      );
 
-          // Draw neon geometric target
-          sCtx.strokeStyle = '#00f0ff';
-          sCtx.lineWidth = 2;
-          sCtx.strokeRect(30, 30, 340, 240);
+      const dataUrl = canvas.toDataURL(
+        'image/jpeg',
+        0.92,
+      );
 
-          sCtx.beginPath();
-          sCtx.arc(200, 150, 60, 0, Math.PI * 2);
-          sCtx.stroke();
-
-          sCtx.beginPath();
-          sCtx.moveTo(140, 150);
-          sCtx.lineTo(260, 150);
-          sCtx.moveTo(200, 90);
-          sCtx.lineTo(200, 210);
-          sCtx.stroke();
-
-          sCtx.fillStyle = '#00f0ff';
-          sCtx.font = '14px monospace';
-          sCtx.fillText('GOLEM // HUD SPATIAL SCAN', 40, 60);
-          sCtx.fillStyle = '#38bdf8';
-          sCtx.font = '11px monospace';
-          sCtx.fillText('LAT: 52.5200 // LNG: 13.4050 // FOV: 84°', 40, 250);
-
-          dataUrl = simCanvas.toDataURL('image/jpeg');
-        }
-      }
-
-      setIsCapturing(false);
       onCapture(dataUrl);
       onClose();
-    }, 350);
+    } finally {
+      setIsCapturing(false);
+    }
   };
 
   return (
@@ -174,7 +154,7 @@ export const CameraHudView: React.FC<CameraHudViewProps> = ({
             <div className="mt-8 text-center font-mono z-10 px-4">
               <div className="text-sm font-bold tracking-[0.2em] text-cyan-300 flex items-center justify-center gap-2">
                 <Sparkles className="w-4 h-4 text-cyan-400 animate-spin" />
-                OPTICAL SENSOR MATRIX // STANDBY
+                OPTICAL SENSOR MATRIX // ARUCO 50 MM READY
               </div>
               <p className="text-xs text-slate-400 mt-1 max-w-sm">
                 Target subject for 3D point-cloud extraction and neural mesh reconstruction
@@ -245,7 +225,7 @@ export const CameraHudView: React.FC<CameraHudViewProps> = ({
         <div className="flex flex-col items-center pb-2 pointer-events-auto">
           <button
             onClick={handleCapture}
-            disabled={isCapturing}
+            disabled={isCapturing || !useRealCamera}
             className="group relative flex items-center justify-center p-1 cursor-pointer transition-transform active:scale-95"
           >
             {/* Outer ring */}
@@ -258,7 +238,7 @@ export const CameraHudView: React.FC<CameraHudViewProps> = ({
           </button>
 
           <span className="font-mono text-xs font-bold text-cyan-300 tracking-[0.2em] mt-2 bg-black/80 px-3 py-0.5 border border-cyan-500/30 clip-faceted-sm">
-            {isCapturing ? 'ACQUIRING POINT-CLOUD...' : 'CAPTURE 3D SCAN'}
+            {!useRealCamera ? 'CAMERA UNAVAILABLE · USE + PHOTO' : isCapturing ? 'CAPTURING VISION FRAME...' : 'CAPTURE FOR GOLEM VISION'}
           </span>
         </div>
       </div>

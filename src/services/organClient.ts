@@ -163,6 +163,7 @@ export class OrganClient {
   chat(input: {
     message: string;
     imageDataUrl?: string;
+    visionMeasurementId?: string;
     preferredProvider?: string;
     traceId?: string;
     maxTime?: number;
@@ -172,6 +173,7 @@ export class OrganClient {
       body: JSON.stringify({
         message: input.message,
         image_data_url: input.imageDataUrl,
+        vision_measurement_id: input.visionMeasurementId,
         preferred_provider: input.preferredProvider || 'auto',
         trace_id: input.traceId,
         max_time: input.maxTime ?? 180,
@@ -189,6 +191,29 @@ export class OrganClient {
   telemetry() { return this.request('/v1/system/telemetry'); }
   capabilities() { return this.request('/v1/capabilities'); }
   toolbelt() { return this.request('/v1/toolbelt', {}, true); }
+  visionStatus() {
+    return this.request('/v1/vision/status', {}, true);
+  }
+
+  visionMeasure(input: {
+    imageDataUrl: string;
+    markerSizeMm?: number;
+    markerId?: number;
+  }) {
+    return this.request(
+      '/v1/vision/measure',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          image_data_url: input.imageDataUrl,
+          marker_size_mm: input.markerSizeMm ?? 50,
+          marker_id: input.markerId ?? 0,
+        }),
+      },
+      true,
+    );
+  }
+
   projects() { return this.request('/v1/projects', {}, true); }
 
   project(projectId: string) {

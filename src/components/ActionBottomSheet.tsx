@@ -45,7 +45,7 @@ export const ActionBottomSheet: React.FC<ActionBottomSheetProps> = ({
 
           {/* 3 Action Buttons */}
           <div className="grid grid-cols-3 gap-3">
-            {/* 1. Add Photo */}
+            {/* 1. Photo + Vision */}
             <button
               onClick={() => onSelectAction('photo')}
               className="flex flex-col items-center justify-center p-4 bg-slate-900/90 hover:bg-slate-800 border border-slate-700 hover:border-cyan-400/80 clip-faceted-sm transition-all group cursor-pointer"
@@ -54,7 +54,7 @@ export const ActionBottomSheet: React.FC<ActionBottomSheetProps> = ({
                 <Image className="w-6 h-6" />
               </div>
               <span className="text-xs font-semibold text-slate-200 group-hover:text-cyan-200">
-                Add Photo
+                Photo + Vision
               </span>
               <span className="text-[10px] font-mono text-slate-400 mt-0.5">
                 Gallery / JPG
@@ -77,7 +77,7 @@ export const ActionBottomSheet: React.FC<ActionBottomSheetProps> = ({
               </span>
             </button>
 
-            {/* 3. Open Camera */}
+            {/* 3. Vision Camera */}
             <button
               onClick={() => onSelectAction('camera')}
               className="flex flex-col items-center justify-center p-4 bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-400 clip-faceted-sm transition-all group cursor-pointer shadow-[0_0_15px_rgba(0,240,255,0.2)]"
@@ -86,16 +86,16 @@ export const ActionBottomSheet: React.FC<ActionBottomSheetProps> = ({
                 <Camera className="w-7 h-7" />
               </div>
               <span className="text-xs font-bold text-cyan-300 group-hover:text-cyan-100">
-                Open Camera
+                Vision Camera
               </span>
               <span className="text-[10px] font-mono text-cyan-400/80 mt-0.5">
-                HUD Scanner
+                ARUCO / METRIC
               </span>
             </button>
           </div>
 
           <div className="mt-4 pt-3 border-t border-slate-800 text-center text-[10px] font-mono text-slate-500">
-            TRANSMITS SPATIAL DATA DIRECTLY TO GOLEM 3D PIPELINE
+            PHOTO / CAMERA → OPENCV WHEN ARUCO IS PRESENT → GOLEM 3D PIPELINE
           </div>
         </div>
       </div>

@@ -74,6 +74,15 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({ message, onOpenComparato
               <span>ATTACHED_HUD_SCAN.JPG</span>
               <span className="text-emerald-400">INGESTED</span>
             </div>
+            {message.visionMeasurement?.evidence?.verified && (
+              <div className="px-2 pb-1 text-[9px] font-mono text-emerald-300">
+                VISION VERIFIED · {Number(message.visionMeasurement.object.width_mm).toFixed(1)}
+                {' × '}
+                {Number(message.visionMeasurement.object.height_mm).toFixed(1)} mm
+                {' · '}
+                {Math.round(Number(message.visionMeasurement.confidence) * 100)}%
+              </div>
+            )}
           </div>
         )}
 
