@@ -2,6 +2,8 @@ import React from 'react';
 import { ChatMessage } from '../types';
 import { ModelViewer3D } from './ModelViewer3D';
 import { SynthesisProgressBar } from './SynthesisProgressBar';
+import { VisionAttachmentBadge } from './VisionAttachmentBadge';
+import { useI18n } from '../i18n';
 import { Bot, User, Sparkles } from 'lucide-react';
 
 interface ChatBubbleProps {
@@ -10,7 +12,14 @@ interface ChatBubbleProps {
 }
 
 export const ChatBubble: React.FC<ChatBubbleProps> = ({ message, onOpenComparator }) => {
+  const { t } = useI18n();
   const isGolem = message.sender === 'golem';
+
+  const visionBadgeState = message.visionMeasurement?.evidence?.verified
+    ? 'VERIFIED'
+    : message.visionMeasurement?.truth_state === 'APPROXIMATE' || message.visionMeasurement
+    ? 'APPROXIMATE'
+    : 'REFERENCE ONLY';
 
   return (
     <div
@@ -42,7 +51,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({ message, onOpenComparato
               isGolem ? 'text-cyan-400' : 'text-sky-300'
             }`}
           >
-            {isGolem ? 'GOLEM // GUARDIAN' : 'OPERATOR'}
+            {isGolem ? t.golemGuardian : t.operatorSender}
           </span>
           <span className="text-slate-500 text-[10px]">{message.timestamp}</span>
           {isGolem && message.source && (
@@ -64,25 +73,20 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({ message, onOpenComparato
 
         {/* Attached Photo preview */}
         {message.attachedImage && (
-          <div className="mb-2 p-1 bg-slate-900 border border-cyan-500/50 clip-faceted-sm shadow-md">
+          <div className="mb-2 p-1.5 bg-slate-900 border border-cyan-500/50 clip-faceted-sm shadow-md space-y-1.5">
             <img
               src={message.attachedImage}
               alt="Scan capture"
-              className="max-h-44 rounded-none object-cover border border-cyan-500/30"
+              className="max-h-44 rounded-none object-cover border border-cyan-500/30 w-full"
             />
-            <div className="px-2 py-1 text-[10px] font-mono text-cyan-300 flex items-center justify-between">
+            <div className="px-1 text-[10px] font-mono text-cyan-300 flex items-center justify-between">
               <span>ATTACHED_HUD_SCAN.JPG</span>
-              <span className="text-emerald-400">INGESTED</span>
+              <span className="text-emerald-400">{t.attachedScanIngested}</span>
             </div>
-            {message.visionMeasurement?.evidence?.verified && (
-              <div className="px-2 pb-1 text-[9px] font-mono text-emerald-300">
-                VISION VERIFIED · {Number(message.visionMeasurement.object.width_mm).toFixed(1)}
-                {' × '}
-                {Number(message.visionMeasurement.object.height_mm).toFixed(1)} mm
-                {' · '}
-                {Math.round(Number(message.visionMeasurement.confidence) * 100)}%
-              </div>
-            )}
+            <VisionAttachmentBadge
+              state={visionBadgeState}
+              measurement={message.visionMeasurement}
+            />
           </div>
         )}
 

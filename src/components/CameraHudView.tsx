@@ -1,252 +1,239 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { Camera, ArrowLeft, RefreshCw, Crosshair, Sparkles, Shield, Compass } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { AlertTriangle, ArrowLeft, Camera, DraftingCompass, FolderOpen, RefreshCw, RotateCw, X } from 'lucide-react';
+import { useI18n } from '../i18n';
+import { organClient } from '../services/organClient';
+import { CaptureSector, DrawingAnalysisResult, DrawingReviewDimension, VisionBoundingBox, VisionCameraMode } from '../types/vision';
+import { useCameraLifecycle } from '../hooks/useCameraLifecycle';
+import { useVisionLiveSession } from '../hooks/useVisionLiveSession';
+import { VisionToolSelector } from './VisionToolSelector';
+import { VisionStatusOverlay } from './VisionStatusOverlay';
+import { VisionObjectOverlay } from './VisionObjectOverlay';
+import { ObjectCaptureHud } from './ObjectCaptureHud';
+import { DrawingReviewPanel } from './DrawingReviewPanel';
 
-interface CameraHudViewProps {
+interface Props {
   isOpen: boolean;
   onClose: () => void;
-  onCapture: (imageDataUrl: string) => void;
+  onCapture: (imageDataUrl: string, mode: VisionCameraMode) => void;
+  initialMode?: VisionCameraMode;
+  onCaptureDatasetReady?: (capture: Record<string, unknown>) => void;
+  onDrawingConfirmed?: (imageDataUrl: string, grounding: Record<string, unknown>) => void;
 }
 
-export const CameraHudView: React.FC<CameraHudViewProps> = ({
+export const CameraHudView: React.FC<Props> = ({
   isOpen,
   onClose,
   onCapture,
+  initialMode = 'auto',
+  onCaptureDatasetReady,
+  onDrawingConfirmed,
 }) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  const [useRealCamera, setUseRealCamera] = useState(false);
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [simulatedMeshAngle, setSimulatedMeshAngle] = useState(0);
+  const { t } = useI18n();
+  const [mode, setMode] = useState<VisionCameraMode>(initialMode);
+  const [flash, setFlash] = useState(false);
+  const [manualRoi, setManualRoi] = useState<VisionBoundingBox | null>(null);
+  const [captureSessionId, setCaptureSessionId] = useState<string | null>(null);
+  const [drawingImage, setDrawingImage] = useState<string | null>(null);
+  const [drawingAnalysis, setDrawingAnalysis] = useState<DrawingAnalysisResult | null>(null);
+  const [drawingAnalyzing, setDrawingAnalyzing] = useState(false);
+  const [showDrawingReview, setShowDrawingReview] = useState(false);
 
-  // Initialize camera or fallback
+  const {
+    state: cameraState,
+    errorCode,
+    errorMessage,
+    videoRef,
+    openCamera,
+    closeCamera,
+    retryCamera,
+    switchFacingMode,
+    captureFrame,
+    captureAnalysisFrame,
+  } = useCameraLifecycle({ idealFacingMode: 'environment' });
+
+  const live = useVisionLiveSession({
+    enabled: isOpen && cameraState === 'live',
+    mode,
+    captureAnalysisFrame,
+  });
+
   useEffect(() => {
     if (!isOpen) {
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-        setStream(null);
-      }
+      closeCamera();
       return;
     }
-
-    let isMounted = true;
-
-    async function initCamera() {
-      try {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          const mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-            audio: false,
-          });
-          if (!isMounted) {
-            mediaStream.getTracks().forEach((t) => t.stop());
-            return;
-          }
-          setStream(mediaStream);
-          setUseRealCamera(true);
-          if (videoRef.current) {
-            videoRef.current.srcObject = mediaStream;
-          }
-        }
-      } catch (err) {
-        console.log('Webcam access optional or denied in sandbox; utilizing HUD simulation matrix:', err);
-        setUseRealCamera(false);
-      }
-    }
-
-    initCamera();
-
-    return () => {
-      isMounted = false;
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-      }
-    };
-  }, [isOpen]);
-
-  // Simulated scan animation if real camera not available
-  useEffect(() => {
-    if (!isOpen || useRealCamera) return;
-    const interval = setInterval(() => {
-      setSimulatedMeshAngle((prev) => (prev + 2) % 360);
-    }, 50);
-    return () => clearInterval(interval);
-  }, [isOpen, useRealCamera]);
+    setMode(initialMode);
+    setManualRoi(null);
+    setCaptureSessionId(null);
+    setDrawingImage(null);
+    setDrawingAnalysis(null);
+    setShowDrawingReview(false);
+    void openCamera();
+  }, [closeCamera, initialMode, isOpen, openCamera]);
 
   if (!isOpen) return null;
 
-  const handleCapture = () => {
-    if (
-      isCapturing
-      || !useRealCamera
-      || !videoRef.current
-    ) {
-      return;
-    }
-
-    setIsCapturing(true);
-
-    try {
-      const video = videoRef.current;
-      const canvas = document.createElement('canvas');
-
-      canvas.width = video.videoWidth || 1280;
-      canvas.height = video.videoHeight || 720;
-
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        throw new Error('Camera canvas is unavailable');
-      }
-
-      // Raw pixels only: display HUD graphics are never burned into CV evidence.
-      ctx.drawImage(
-        video,
-        0,
-        0,
-        canvas.width,
-        canvas.height,
-      );
-
-      const dataUrl = canvas.toDataURL(
-        'image/jpeg',
-        0.92,
-      );
-
-      onCapture(dataUrl);
-      onClose();
-    } finally {
-      setIsCapturing(false);
+  const errorDescription = () => {
+    switch (errorCode) {
+      case 'permission_denied': return t.cameraPermissionDenied;
+      case 'not_found': return t.cameraNotFound;
+      case 'in_use': return t.cameraInUse;
+      case 'interrupted': return t.cameraInterrupted;
+      case 'unsupported': return t.cameraUnsupported;
+      default: return errorMessage || t.cameraUnknownError;
     }
   };
 
+  const choosePhoto = () => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/*';
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const image = String(reader.result || '');
+        if (!image) return;
+        if (mode === 'drawing') void analyzeDrawing(image);
+        else { onCapture(image, mode); onClose(); }
+      };
+      reader.readAsDataURL(file);
+    }, { once: true });
+    input.click();
+  };
+
+  const analyzeDrawing = async (image: string) => {
+    setDrawingImage(image);
+    setDrawingAnalysis(null);
+    setDrawingAnalyzing(true);
+    setShowDrawingReview(true);
+    try {
+      const response = await organClient.drawingAnalyze({ imageDataUrl: image, filename: 'drawing.jpg' });
+      setDrawingAnalysis((response?.analysis || null) as DrawingAnalysisResult | null);
+    } finally {
+      setDrawingAnalyzing(false);
+    }
+  };
+
+  const handleShutter = async () => {
+    if (cameraState !== 'live' || mode === 'capture') return;
+    setFlash(true);
+    try {
+      const image = await captureFrame();
+      if (!image) return;
+      if (mode === 'drawing') await analyzeDrawing(image);
+      else { onCapture(image, mode); onClose(); }
+    } finally {
+      window.setTimeout(() => setFlash(false), 260);
+    }
+  };
+
+  const selectManualRoi = async (bbox: VisionBoundingBox) => {
+    setManualRoi(bbox);
+    if (live.sessionId) await organClient.visionObjectSelect({ sessionId: live.sessionId, bbox, locked: true });
+  };
+
+  const clearManualRoi = async () => {
+    setManualRoi(null);
+    if (live.sessionId) {
+      // Clearing is represented locally; a future explicit server clear endpoint can replace this.
+    }
+  };
+
+  const startCapture = async () => {
+    const response = await organClient.visionCaptureStart({ objectLabel: 'target_object', targetSectorCount: 8 });
+    const id = String(response?.capture?.capture_session_id || '');
+    if (!id) return false;
+    setCaptureSessionId(id);
+    return true;
+  };
+
+  const captureSector = async (sector: CaptureSector, index: number) => {
+    if (!captureSessionId) return { accepted: false, warnings: ['capture session unavailable'] };
+    const image = await captureFrame();
+    if (!image) return { accepted: false, warnings: ['camera frame unavailable'] };
+    const response = await organClient.visionCaptureFrame({
+      captureSessionId,
+      sectorIndex: index,
+      yawDeg: sector.yawDeg,
+      pitchDeg: sector.pitchDeg,
+      imageDataUrl: image,
+    });
+    return {
+      accepted: Boolean(response?.accepted),
+      warnings: (response?.frame?.quality?.warnings || []) as string[],
+    };
+  };
+
+  const finishCapture = async () => {
+    if (!captureSessionId) return { datasetReady: false, frameCount: 0 };
+    const response = await organClient.visionCaptureFinish({ captureSessionId });
+    const capture = (response?.capture || {}) as Record<string, unknown>;
+    onCaptureDatasetReady?.(capture);
+    const frames = Array.isArray(capture.frames) ? capture.frames.length : 0;
+    return { datasetReady: Boolean(capture.dataset_ready), frameCount: frames };
+  };
+
+  const confirmDrawing = async (dims: DrawingReviewDimension[], targetCad: 'FreeCAD' | 'OpenSCAD') => {
+    if (!drawingAnalysis?.drawingId || !drawingImage) return;
+    const response = await organClient.drawingConfirm({
+      drawingId: drawingAnalysis.drawingId,
+      targetCad,
+      dimensions: dims.map((dim) => ({ name: dim.name, nominalValue: dim.nominalValue, unit: dim.unit })),
+    });
+    const grounding = (response?.grounding || {}) as Record<string, unknown>;
+    onDrawingConfirmed?.(drawingImage, grounding);
+    onClose();
+  };
+
+  const candidate = live.analysis?.object || null;
+  const guidance = live.analysis?.guidance;
+  const scale = live.analysis?.scale;
+
   return (
-    <div className="fixed inset-0 z-50 bg-black flex flex-col justify-between overflow-hidden select-none">
-      {/* 1. Camera Viewfinder or Simulated HUD Matrix */}
-      <div className="absolute inset-0 z-0 bg-slate-950 flex items-center justify-center">
-        {useRealCamera ? (
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <div className="relative w-full h-full bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black flex flex-col items-center justify-center text-cyan-400">
-            {/* Holographic Wireframe Grid */}
-            <div className="absolute inset-0 bg-[linear-gradient(to_right,#00f0ff0d_1px,transparent_1px),linear-gradient(to_bottom,#00f0ff0d_1px,transparent_1px)] bg-[size:40px_40px]" />
+    <div className="fixed inset-0 z-50 bg-black flex flex-col overflow-hidden select-none">
+      <header className="relative z-40 h-12 bg-slate-950/95 border-b border-cyan-500/40 px-2 sm:px-3 flex items-center justify-between gap-2 shrink-0">
+        <button onClick={onClose} className="p-2 sm:px-3 sm:py-1.5 bg-black/80 border border-cyan-500/50 text-cyan-300 flex items-center gap-1.5" title={t.cameraBackToChat} aria-label={t.cameraBackToChat}>
+          <ArrowLeft className="w-4 h-4" /><span className="hidden sm:inline text-[10px] font-mono font-bold">{t.cameraBackToChat}</span>
+        </button>
+        {!showDrawingReview ? <VisionToolSelector currentMode={mode} onSelectMode={(next) => { setMode(next); setManualRoi(null); }} disabled={cameraState !== 'live'} /> : <div className="flex items-center gap-1.5 text-xs font-mono text-cyan-300"><DraftingCompass className="w-4 h-4" />{t.drawingReviewHeader}</div>}
+        <div className="flex items-center gap-1.5">
+          {cameraState === 'live' && !showDrawingReview && <button onClick={() => void switchFacingMode()} className="p-2 text-cyan-300 border border-cyan-500/30" title={t.cameraSwitchFacingBtn}><RotateCw className="w-4 h-4" /></button>}
+          <button onClick={onClose} className="p-2 text-slate-400 hover:text-red-400" aria-label={t.cameraBackToChat}><X className="w-4 h-4" /></button>
+        </div>
+      </header>
 
-            {/* Rotating Monolith Object Simulation */}
-            <div 
-              className="relative w-48 h-48 border-2 border-cyan-400/50 clip-faceted-sm flex items-center justify-center shadow-[0_0_30px_rgba(0,240,255,0.2)] transition-transform"
-              style={{ transform: `rotate(${simulatedMeshAngle * 0.5}deg)` }}
-            >
-              <div 
-                className="w-32 h-32 border border-sky-400/60 clip-faceted-corner flex items-center justify-center"
-                style={{ transform: `rotate(-${simulatedMeshAngle}deg)` }}
-              >
-                <div className="w-16 h-16 border border-cyan-300 bg-cyan-950/40 flex items-center justify-center">
-                  <Shield className="w-8 h-8 text-cyan-300 animate-pulse" />
-                </div>
-              </div>
-            </div>
+      <div className="relative flex-1 overflow-hidden bg-slate-950">
+        <video ref={videoRef} autoPlay playsInline muted className={`absolute inset-0 w-full h-full object-cover ${cameraState === 'live' ? 'opacity-100' : 'opacity-0'}`} />
 
-            <div className="mt-8 text-center font-mono z-10 px-4">
-              <div className="text-sm font-bold tracking-[0.2em] text-cyan-300 flex items-center justify-center gap-2">
-                <Sparkles className="w-4 h-4 text-cyan-400 animate-spin" />
-                OPTICAL SENSOR MATRIX // ARUCO 50 MM READY
+        {cameraState === 'opening' && <div className="absolute inset-0 z-30 flex items-center justify-center gap-2 text-cyan-300 font-mono text-xs"><RefreshCw className="w-5 h-5 animate-spin" />{t.cameraOpening}</div>}
+        {cameraState === 'error' && <div className="absolute inset-0 z-30 flex items-center justify-center p-5"><div className="w-full max-w-md bg-slate-950 border border-red-500/50 p-4 text-center font-mono"><AlertTriangle className="w-7 h-7 text-red-400 mx-auto" /><div className="mt-2 text-red-300 text-xs font-bold">{t.cameraError}</div><div className="mt-1 text-slate-300 text-[10px]">{errorDescription()}</div><div className="mt-3 grid grid-cols-2 gap-2"><button onClick={() => void retryCamera()} className="px-3 py-2 bg-cyan-500 text-black text-xs font-bold"><RefreshCw className="inline w-3 h-3 mr-1" />{t.cameraRetryBtn}</button><button onClick={choosePhoto} className="px-3 py-2 bg-slate-900 border border-slate-700 text-cyan-300 text-xs"><FolderOpen className="inline w-3 h-3 mr-1" />{t.cameraChoosePhotoBtn}</button></div></div></div>}
+
+        {showDrawingReview && <div className="absolute inset-0 z-35 bg-slate-950 overflow-y-auto"><DrawingReviewPanel analysis={drawingAnalysis} isAnalyzing={drawingAnalyzing} onConfirmDimensions={confirmDrawing} onDiscard={() => setShowDrawingReview(false)} onBackToChat={onClose} /></div>}
+
+        {!showDrawingReview && cameraState === 'live' && (
+          <>
+            {(mode === 'auto' || mode === 'measure') && (
+              <div className="absolute inset-0 z-20 pointer-events-none">
+                {guidance && <div className="absolute top-3 left-1/2 -translate-x-1/2"><VisionStatusOverlay guidanceState={guidance} confidence={scale?.confidence} scaleProvider={scale?.provider} markerId={scale?.marker_id} /></div>}
+                <VisionObjectOverlay candidate={candidate} manualRoi={manualRoi} onManualSelect={selectManualRoi} onClear={clearManualRoi} />
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><div className="w-64 h-64 border border-cyan-400/25 relative"><div className="absolute left-1/2 top-0 bottom-0 w-px bg-cyan-400/20" /><div className="absolute top-1/2 left-0 right-0 h-px bg-cyan-400/20" /></div></div>
+                {live.error && <div className="absolute bottom-24 left-1/2 -translate-x-1/2 px-2 py-1 bg-black/80 border border-amber-500/40 text-amber-300 text-[9px] font-mono">LIVE VISION: {live.error}</div>}
               </div>
-              <p className="text-xs text-slate-400 mt-1 max-w-sm">
-                Target subject for 3D point-cloud extraction and neural mesh reconstruction
-              </p>
-            </div>
-          </div>
+            )}
+
+            {mode === 'capture' && <ObjectCaptureHud onStartCapture={startCapture} onCaptureSector={captureSector} onFinishCapture={finishCapture} />}
+
+            {mode !== 'capture' && (
+              <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-1 pointer-events-auto">
+                <button onClick={() => void handleShutter()} disabled={cameraState !== 'live'} className="w-18 h-18 rounded-full border-2 border-cyan-400 flex items-center justify-center disabled:opacity-40"><div className="w-13 h-13 bg-cyan-400 flex items-center justify-center"><Camera className="w-6 h-6 text-black" /></div></button>
+                <span className="px-2 py-0.5 bg-black/80 border border-cyan-500/30 text-cyan-300 text-[9px] font-mono">{t.cameraShutterLabel}</span>
+              </div>
+            )}
+          </>
         )}
-
-        {/* Scanline Sweep Effect */}
-        <div className="scanlines-overlay absolute inset-0 z-10" />
-
-        {/* Horizontal Laser Scanning Beam */}
-        <div className="absolute inset-x-0 h-1 bg-gradient-to-r from-transparent via-cyan-400 to-transparent opacity-75 animate-bounce z-15 pointer-events-none" />
       </div>
-
-      {/* 2. Custom HUD Overlay (Crosshairs, Brackets & Telemetry) */}
-      <div className="relative z-20 flex-1 flex flex-col justify-between p-4 sm:p-6 pointer-events-none">
-        {/* Top HUD Bar */}
-        <div className="flex items-center justify-between pointer-events-auto">
-          <button
-            onClick={onClose}
-            className="flex items-center gap-2 px-3 py-1.5 bg-slate-950/90 border border-cyan-500/70 text-cyan-400 clip-faceted-sm hover:bg-cyan-950 transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span className="font-mono text-xs font-semibold">EXIT HUD</span>
-          </button>
-
-          <div className="flex items-center gap-3 font-mono text-[11px] text-cyan-300 bg-black/80 px-3 py-1.5 border border-cyan-500/40 clip-faceted-sm">
-            <span className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-              SENSORS: LOCK
-            </span>
-            <span>•</span>
-            <span>FOV 84°</span>
-            <span>•</span>
-            <span>60 FPS</span>
-          </div>
-        </div>
-
-        {/* Center Crosshairs & Targeting Brackets */}
-        <div className="relative flex items-center justify-center pointer-events-none">
-          {/* Outer Crosshair Ring */}
-          <div className="relative w-64 h-64 sm:w-72 sm:h-72 border border-cyan-400/30 rounded-full flex items-center justify-center">
-            {/* Inner Ring */}
-            <div className="w-36 h-36 border border-dashed border-cyan-400/50 rounded-full flex items-center justify-center" />
-
-            {/* Corner Framing Brackets */}
-            <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-cyan-400" />
-            <div className="absolute top-0 right-0 w-8 h-8 border-t-2 border-r-2 border-cyan-400" />
-            <div className="absolute bottom-0 left-0 w-8 h-8 border-b-2 border-l-2 border-cyan-400" />
-            <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-cyan-400" />
-
-            {/* Reticle Lines */}
-            <div className="absolute inset-x-0 h-px bg-cyan-400/30" />
-            <div className="absolute inset-y-0 w-px bg-cyan-400/30" />
-
-            {/* Center Target Dot */}
-            <div className="w-3 h-3 bg-cyan-400 clip-faceted-sm shadow-[0_0_10px_#00f0ff]" />
-          </div>
-
-          {/* Telemetry Labels around Crosshairs */}
-          <div className="absolute top-2 font-mono text-[10px] text-cyan-300/80 tracking-widest bg-black/70 px-2 py-0.5 border border-cyan-500/20">
-            PITCH: +14.2° // YAW: -03.8°
-          </div>
-        </div>
-
-        {/* Bottom Shutter Controls */}
-        <div className="flex flex-col items-center pb-2 pointer-events-auto">
-          <button
-            onClick={handleCapture}
-            disabled={isCapturing || !useRealCamera}
-            className="group relative flex items-center justify-center p-1 cursor-pointer transition-transform active:scale-95"
-          >
-            {/* Outer ring */}
-            <div className="w-20 h-20 rounded-full border-2 border-cyan-400 flex items-center justify-center group-hover:shadow-[0_0_25px_rgba(0,240,255,0.7)] transition-shadow">
-              {/* Inner Faceted Shutter Button */}
-              <div className="w-14 h-14 bg-cyan-400 clip-faceted-sm flex items-center justify-center group-hover:bg-cyan-300 transition-colors">
-                <Camera className="w-7 h-7 text-black" />
-              </div>
-            </div>
-          </button>
-
-          <span className="font-mono text-xs font-bold text-cyan-300 tracking-[0.2em] mt-2 bg-black/80 px-3 py-0.5 border border-cyan-500/30 clip-faceted-sm">
-            {!useRealCamera ? 'CAMERA UNAVAILABLE · USE + PHOTO' : isCapturing ? 'CAPTURING VISION FRAME...' : 'CAPTURE FOR GOLEM VISION'}
-          </span>
-        </div>
-      </div>
-
-      {/* Shutter Flash effect */}
-      {isCapturing && (
-        <div className="absolute inset-0 bg-cyan-200 z-50 animate-out fade-out duration-300 pointer-events-none" />
-      )}
+      {flash && <div className="absolute inset-0 z-50 bg-cyan-100/90 pointer-events-none" />}
     </div>
   );
 };

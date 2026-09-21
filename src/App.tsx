@@ -13,23 +13,25 @@ import {
   Volume2,
   Terminal,
   CheckCircle2,
-  Scale
+  Scale,
+  FolderKanban
 } from 'lucide-react';
-import { FolderKanban } from 'lucide-react';
 import { ChatMessage, AppLanguage, SynthesisHistoryItem, VisionMeasurement } from './types';
+import { VisionCameraMode, VisionAttachmentState } from './types/vision';
 import { GolemDrawer } from './components/GolemDrawer';
 import { ChatBubble } from './components/ChatBubble';
-import { ActionBottomSheet } from './components/ActionBottomSheet';
+import { ActionBottomSheet, ActionBottomSheetType } from './components/ActionBottomSheet';
 import { CameraHudView } from './components/CameraHudView';
 import { FlutterCodeViewer } from './components/FlutterCodeViewer';
 import { GolemHoloLogo } from './components/GolemHoloLogo';
 import { VramComputeGauge, SynthesisStageType } from './components/VramComputeGauge';
 import { SynthesisComparator } from './components/SynthesisComparator';
 import { ProjectBrowser } from './components/ProjectBrowser';
+import { VisionAttachmentBadge } from './components/VisionAttachmentBadge';
 import { organClient, pickArtifact, OrganResult } from './services/organClient';
-
-
 import { voiceClient } from './services/voiceClient';
+import { I18nProvider, useI18n } from './i18n';
+
 async function pickLocalFile(accept: string): Promise<File | null> {
   return new Promise((resolve) => {
     const input = document.createElement('input');
@@ -48,65 +50,6 @@ async function fileToDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error || new Error('File read failed'));
     reader.readAsDataURL(file);
   });
-}
-
-function runAudioDiagnostic(show: (message: string) => void) {
-  try {
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    const context = new AudioCtx();
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    oscillator.frequency.value = 432;
-    gain.gain.value = 0.035;
-    oscillator.connect(gain);
-    gain.connect(context.destination);
-    oscillator.start();
-    oscillator.stop(context.currentTime + 0.22);
-    oscillator.onended = () => void context.close();
-    show('Audio diagnostic: real 432 Hz test tone emitted.');
-  } catch {
-    show('Audio diagnostic is unavailable on this platform.');
-  }
-}
-
-function jobProgress(state: string) {
-  switch (state) {
-    case 'queued':
-      return {
-        progress: 8,
-        stage: 'ingestion' as const,
-        status: 'Queued for 3D/CAD Organ...',
-        detail: 'Request validated and persisted.',
-      };
-    case 'accepted':
-      return {
-        progress: 18,
-        stage: 'ingestion' as const,
-        status: 'Accepted by 3D/CAD Organ...',
-        detail: 'Selecting bounded provider path.',
-      };
-    case 'running':
-      return {
-        progress: 68,
-        stage: 'mesh_synthesis' as const,
-        status: 'Real provider executing geometry job...',
-        detail: 'Blender / FreeCAD / OpenSCAD is running.',
-      };
-    case 'verifying':
-      return {
-        progress: 90,
-        stage: 'mesh_synthesis' as const,
-        status: 'Verifying generated artifacts...',
-        detail: 'Checking file format, hashes and effect metadata.',
-      };
-    default:
-      return {
-        progress: 45,
-        stage: 'mesh_synthesis' as const,
-        status: `Runtime state: ${state}`,
-        detail: '3D/CAD Organ active.',
-      };
-  }
 }
 
 function formatArtifactSize(bytes: number): string {
@@ -178,45 +121,88 @@ function modelFromResult(result: OrganResult, fallbackName: string) {
       backSpines: Number(metadata.back_spine_count || 0) || undefined,
       rigPresent: typeof metadata.rig_present === 'boolean' ? metadata.rig_present : undefined,
     },
-    asset: {
-      jobId: result.job_id,
-      provider: receipt.provider_id,
-      glbUrl: glb
-        ? organClient.artifactUrl(result.job_id, glb.path)
-        : undefined,
-      downloadUrl: preferred
-        ? organClient.artifactUrl(result.job_id, preferred.path)
-        : undefined,
-      sha256: preferred?.sha256,
-      effectStatus: receipt.effect_status,
-    },
+    asset: preferred
+      ? {
+          jobId: result.job_id,
+          provider: receipt?.provider_id || 'organ',
+          glbUrl: organClient.artifactUrl(result.job_id, preferred.path),
+          downloadUrl: organClient.artifactUrl(result.job_id, preferred.path),
+          sha256: preferred.sha256,
+          effectStatus: receipt?.effect_status,
+        }
+      : undefined,
   };
 }
 
+function jobProgress(state: string) {
+  switch (state) {
+    case 'queued':
+      return {
+        progress: 8,
+        stage: 'ingestion' as const,
+        status: 'Queued for 3D/CAD Organ...',
+        detail: 'Request validated and persisted.',
+      };
+    case 'accepted':
+      return {
+        progress: 18,
+        stage: 'ingestion' as const,
+        status: 'Accepted by 3D/CAD Organ...',
+        detail: 'Selecting bounded provider path.',
+      };
+    case 'running':
+      return {
+        progress: 68,
+        stage: 'mesh_synthesis' as const,
+        status: 'Real provider executing geometry job...',
+        detail: 'Blender / FreeCAD / OpenSCAD is running.',
+      };
+    case 'verifying':
+      return {
+        progress: 90,
+        stage: 'mesh_synthesis' as const,
+        status: 'Verifying generated artifacts...',
+        detail: 'Checking file format, hashes and effect metadata.',
+      };
+    default:
+      return {
+        progress: 45,
+        stage: 'mesh_synthesis' as const,
+        status: `Runtime state: ${state}`,
+        detail: '3D/CAD Organ active.',
+      };
+  }
+}
 
-export default function App() {
-  // Navigation / View layout
-  const [viewMode, setViewMode] = useState<'split' | 'app' | 'code'>('split');
+function GolemAppContent() {
+  const { t, language, setLanguage } = useI18n();
+
+  // Navigation & View Mode State
+  const [viewMode, setViewMode] = useState<'app' | 'split' | 'code'>('split');
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isBottomSheetOpen, setIsBottomSheetOpen] = useState(false);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [cameraInitialMode, setCameraInitialMode] = useState<VisionCameraMode>('auto');
   const [isComparatorOpen, setIsComparatorOpen] = useState(false);
   const [isProjectBrowserOpen, setIsProjectBrowserOpen] = useState(false);
   const [comparatorModelAId, setComparatorModelAId] = useState<string | undefined>(undefined);
   const [comparatorModelBId, setComparatorModelBId] = useState<string | undefined>(undefined);
-  const [currentLanguage, setCurrentLanguage] = useState<AppLanguage>('en');
-  const [isSynthesizing, setIsSynthesizing] = useState(false);
-  const [synthesisProgress, setSynthesisProgress] = useState<number>(0);
-  const [synthesisStage, setSynthesisStage] = useState<SynthesisStageType>('idle');
-  const synthesisIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Cleanup synthesis interval on unmount
+  // Synthesis progress state
+  const [isSynthesizing, setIsSynthesizing] = useState(false);
+  const [synthesisProgress, setSynthesisProgress] = useState(0);
+  const [synthesisStage, setSynthesisStage] = useState<SynthesisStageType>('idle');
+
+  // Responsive: automatically default to 'app' view on mobile
   useEffect(() => {
-    return () => {
-      if (synthesisIntervalRef.current) {
-        clearInterval(synthesisIntervalRef.current);
+    const handleResize = () => {
+      if (window.innerWidth < 768) {
+        setViewMode('app');
       }
     };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   // Chat State
@@ -232,7 +218,8 @@ export default function App() {
   const [promptText, setPromptText] = useState('');
   const [attachedThumbnail, setAttachedThumbnail] = useState<string | null>(null);
   const [attachedVision, setAttachedVision] = useState<VisionMeasurement | null>(null);
-  const [visionState, setVisionState] = useState<'idle' | 'analyzing' | 'measured' | 'reference'>('idle');
+  const [attachedDrawingGroundingId, setAttachedDrawingGroundingId] = useState<string | null>(null);
+  const [visionState, setVisionState] = useState<VisionAttachmentState>('REFERENCE ONLY');
   const [snackBarMessage, setSnackBarMessage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -298,13 +285,15 @@ export default function App() {
   const attachImageWithVision = async (
     imageDataUrl: string,
     sourceLabel: string,
+    mode: VisionCameraMode = 'auto',
   ) => {
     setAttachedThumbnail(imageDataUrl);
     setAttachedVision(null);
-    setVisionState('analyzing');
+    setAttachedDrawingGroundingId(null);
+    setVisionState('PROCESSING');
 
     showSnackBar(
-      `${sourceLabel} attached · GOLEM Vision checking ArUco metric plane...`,
+      `${sourceLabel} · ${t.checkingAruco}`,
     );
 
     try {
@@ -318,9 +307,17 @@ export default function App() {
 
       if (measurement?.evidence?.verified) {
         setAttachedVision(measurement);
-        setVisionState('measured');
+        setVisionState('VERIFIED');
         showSnackBar(
           `VISION VERIFIED · ${Number(measurement.object.width_mm).toFixed(1)} × ${Number(measurement.object.height_mm).toFixed(1)} mm · ${Math.round(Number(measurement.confidence) * 100)}%`,
+        );
+        return;
+      }
+      if (measurement?.truth_state === 'APPROXIMATE') {
+        setAttachedVision(measurement);
+        setVisionState('APPROXIMATE');
+        showSnackBar(
+          `VISION APPROX · ${Number(measurement.object.width_mm).toFixed(1)} × ${Number(measurement.object.height_mm).toFixed(1)} mm · ${String(measurement.scale?.provider || 'ruler').toUpperCase()}`,
         );
         return;
       }
@@ -328,7 +325,7 @@ export default function App() {
       // No ArUco / no clean contour: keep the image as a normal reference.
     }
 
-    setVisionState('reference');
+    setVisionState('REFERENCE ONLY');
     showSnackBar(
       `${sourceLabel} attached as reference · no verified ArUco measurement.`,
     );
@@ -340,8 +337,12 @@ export default function App() {
     if (isSynthesizing) return;
 
     const userMsgText = rawText || (
-      attachedVision
+      attachedDrawingGroundingId
+        ? 'Build from the user-confirmed drawing dimensions. Do not invent drawing topology that was not confirmed.'
+        : attachedVision?.evidence?.verified
         ? 'Use the verified camera measurement as geometry input. Do not invent missing depth; ask for another view or dimension when required.'
+        : attachedVision
+        ? 'Use the approximate ruler-based camera measurement as uncertain geometry context. Preserve uncertainty and do not invent missing depth.'
         : 'Analyze the attached reference without fabricating unavailable geometry.'
     );
     const userMsg: ChatMessage = {
@@ -354,9 +355,11 @@ export default function App() {
     setPromptText('');
     const imageForRequest = attachedThumbnail || undefined;
     const visionForRequest = attachedVision || undefined;
+    const drawingForRequest = attachedDrawingGroundingId || undefined;
     setAttachedThumbnail(null);
     setAttachedVision(null);
-    setVisionState('idle');
+    setAttachedDrawingGroundingId(null);
+    setVisionState('REFERENCE ONLY');
 
     const golemMsgId = (Date.now() + 1).toString();
     setMessages((prev) => [...prev, {
@@ -374,6 +377,7 @@ export default function App() {
         message: userMsgText,
         imageDataUrl: imageForRequest,
         visionMeasurementId: visionForRequest?.measurement_id,
+        drawingGroundingId: drawingForRequest,
         maxTime: 180,
       });
       if (routed?.kind === 'conversation' || routed?.kind === 'clarification') {
@@ -432,7 +436,7 @@ export default function App() {
   };
 
   const handleActionSelect = async (
-    action: 'photo' | 'file' | 'camera',
+    action: ActionBottomSheetType,
   ) => {
     setIsBottomSheetOpen(false);
 
@@ -440,12 +444,13 @@ export default function App() {
       const file = await pickLocalFile('image/*');
       if (!file) return;
       if (file.size > 12 * 1024 * 1024) {
-        showSnackBar('Image is too large; maximum is 12 MB.');
+        showSnackBar(t.imageTooLarge);
         return;
       }
       await attachImageWithVision(
         await fileToDataUrl(file),
         `Photo ${file.name}`,
+        'auto',
       );
       return;
     }
@@ -466,14 +471,41 @@ export default function App() {
       return;
     }
 
-    setIsCameraOpen(true);
+    if (action === 'camera') {
+      setCameraInitialMode('auto');
+      setIsCameraOpen(true);
+      return;
+    }
+
+    if (action === 'capture') {
+      setCameraInitialMode('capture');
+      setIsCameraOpen(true);
+      return;
+    }
+
+    if (action === 'drawing') {
+      setCameraInitialMode('drawing');
+      setIsCameraOpen(true);
+      return;
+    }
   };
 
-  const handleCameraCapture = async (imageDataUrl: string) => {
-    await attachImageWithVision(
-      imageDataUrl,
-      'Vision camera frame',
-    );
+  const handleCameraCapture = async (imageDataUrl: string, mode: VisionCameraMode) => {
+    await attachImageWithVision(imageDataUrl, mode === 'measure' ? 'Vision measurement' : 'Vision camera frame', mode);
+  };
+
+  const handleCaptureDatasetReady = (capture: Record<string, unknown>) => {
+    const frames = Array.isArray(capture.frames) ? capture.frames.length : 0;
+    showSnackBar(`${t.captureTitle} · ${frames} ${t.captureFrames} · DATASET ONLY`);
+  };
+
+  const handleDrawingConfirmed = (imageDataUrl: string, grounding: Record<string, unknown>) => {
+    const groundingId = String(grounding.grounding_id || '');
+    setAttachedThumbnail(imageDataUrl);
+    setAttachedVision(null);
+    setVisionState('REFERENCE ONLY');
+    setAttachedDrawingGroundingId(groundingId || null);
+    showSnackBar(`${t.drawingReviewHeader} · ${t.drawingActionConfirm}`);
   };
 
   return (
@@ -498,7 +530,7 @@ export default function App() {
               </span>
             </div>
             <div className="text-[10px] font-mono text-slate-400 hidden sm:block">
-              HOLOGRAPHIC POLYGONAL COMPANION
+              {t.tagline}
             </div>
           </div>
         </div>
@@ -507,7 +539,7 @@ export default function App() {
         <div className="hidden md:flex items-center gap-3 font-mono text-[11px] px-3 py-1 bg-slate-900 border border-cyan-500/30 clip-faceted-sm text-cyan-300">
           <div className="flex items-center gap-1.5">
             <span className={`w-2 h-2 rounded-full ${isSynthesizing ? 'bg-cyan-400 animate-ping' : 'bg-emerald-400 animate-pulse'}`} />
-            <span>{isSynthesizing ? 'NEURAL MESH COMPUTE BUSY' : 'NEURAL LATTICE ONLINE'}</span>
+            <span>{isSynthesizing ? t.neuralMeshBusy : t.neuralLatticeOnline}</span>
           </div>
           <div className="h-3 w-[1px] bg-cyan-500/30" />
           <VramComputeGauge
@@ -526,7 +558,7 @@ export default function App() {
             title="Open verified GOLEM projects"
           >
             <FolderKanban className="w-3.5 h-3.5" />
-            <span className="font-bold tracking-wider hidden sm:inline">PROJECTS</span>
+            <span className="font-bold tracking-wider hidden sm:inline">{t.headerProjects}</span>
           </button>
 
           <button
@@ -536,7 +568,7 @@ export default function App() {
             title="Open Synthesis Comparator: Side-by-side 3D model geometry & wireframe diff"
           >
             <Scale className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="font-bold tracking-wider hidden sm:inline">3D COMPARATOR</span>
+            <span className="font-bold tracking-wider hidden sm:inline">{t.headerComparator}</span>
             <span className="sm:hidden font-bold">DIFF</span>
           </button>
 
@@ -544,40 +576,40 @@ export default function App() {
             <button
               onClick={() => setViewMode('app')}
               title="Live GOLEM"
-              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono transition-all ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono transition-all cursor-pointer ${
                 viewMode === 'app'
                   ? 'bg-cyan-500 text-black font-bold'
                   : 'text-slate-400 hover:text-cyan-300'
               }`}
             >
               <Smartphone className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Simulation</span>
+              <span className="hidden sm:inline">{t.headerSimulation}</span>
             </button>
 
             <button
               onClick={() => setViewMode('split')}
               title="Split: GOLEM + Runtime"
-              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono transition-all ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono transition-all cursor-pointer ${
                 viewMode === 'split'
                   ? 'bg-cyan-500 text-black font-bold'
                   : 'text-slate-400 hover:text-cyan-300'
               }`}
             >
               <Columns2 className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Split View</span>
+              <span className="hidden sm:inline">{t.headerSplitView}</span>
             </button>
 
             <button
               onClick={() => setViewMode('code')}
               title="Runtime / Contracts"
-              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono transition-all ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono transition-all cursor-pointer ${
                 viewMode === 'code'
                   ? 'bg-cyan-500 text-black font-bold'
                   : 'text-slate-400 hover:text-cyan-300'
               }`}
             >
               <Code2 className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Runtime</span>
+              <span className="hidden sm:inline">{t.headerRuntime}</span>
             </button>
           </div>
         </div>
@@ -593,7 +625,7 @@ export default function App() {
         <button
           type="button"
           onClick={() => setViewMode('app')}
-          className={`flex-1 h-9 flex items-center justify-center gap-1.5 text-[10px] font-mono border transition-all ${
+          className={`flex-1 h-9 flex items-center justify-center gap-1.5 text-[10px] font-mono border transition-all cursor-pointer ${
             viewMode === 'app'
               ? 'bg-cyan-500 border-cyan-300 text-black font-bold shadow-[0_0_10px_rgba(0,240,255,0.35)]'
               : 'bg-slate-950 border-cyan-500/30 text-cyan-300'
@@ -607,7 +639,7 @@ export default function App() {
         <button
           type="button"
           onClick={() => setViewMode('split')}
-          className={`flex-1 h-9 flex items-center justify-center gap-1.5 text-[10px] font-mono border transition-all ${
+          className={`flex-1 h-9 flex items-center justify-center gap-1.5 text-[10px] font-mono border transition-all cursor-pointer ${
             viewMode === 'split'
               ? 'bg-cyan-500 border-cyan-300 text-black font-bold shadow-[0_0_10px_rgba(0,240,255,0.35)]'
               : 'bg-slate-950 border-cyan-500/30 text-cyan-300'
@@ -621,7 +653,7 @@ export default function App() {
         <button
           type="button"
           onClick={() => setViewMode('code')}
-          className={`flex-1 h-9 flex items-center justify-center gap-1.5 text-[10px] font-mono border transition-all ${
+          className={`flex-1 h-9 flex items-center justify-center gap-1.5 text-[10px] font-mono border transition-all cursor-pointer ${
             viewMode === 'code'
               ? 'bg-cyan-500 border-cyan-300 text-black font-bold shadow-[0_0_10px_rgba(0,240,255,0.35)]'
               : 'bg-slate-950 border-cyan-500/30 text-cyan-300'
@@ -635,7 +667,7 @@ export default function App() {
         <button
           type="button"
           onClick={() => handleOpenComparator()}
-          className="w-10 h-9 shrink-0 flex items-center justify-center bg-emerald-950 border border-emerald-500/60 text-emerald-300"
+          className="w-10 h-9 shrink-0 flex items-center justify-center bg-emerald-950 border border-emerald-500/60 text-emerald-300 cursor-pointer"
           title="3D Comparator"
         >
           <Scale className="w-4 h-4" />
@@ -737,7 +769,7 @@ export default function App() {
                     </span>
                   ) : (
                     <span className="text-emerald-400 font-medium tracking-wide">
-                      SYNC // ONLINE
+                      {t.statusSyncOnline}
                     </span>
                   )}
                 </div>
@@ -764,37 +796,45 @@ export default function App() {
 
               {/* Bottom Input Bar */}
               <div className="p-2 sm:p-3 bg-slate-900/95 border-t border-cyan-500/40 shrink-0">
-                {/* Thumbnail Preview if attached */}
+                {/* Attached Scan Preview */}
                 {attachedThumbnail && (
-                  <div className="mb-2 p-1.5 bg-slate-950 border border-cyan-500/70 clip-faceted-sm flex items-center justify-between animate-in fade-in">
-                    <div className="flex items-center gap-2">
+                  <div className="mb-2 p-1.5 bg-slate-950 border border-cyan-500/60 clip-faceted-sm flex items-center justify-between gap-2 animate-in fade-in">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
                       <img
                         src={attachedThumbnail}
                         alt="Attached scan"
-                        className="w-10 h-10 object-cover clip-faceted-sm border border-cyan-400"
+                        className="w-12 h-12 object-cover border border-cyan-400 clip-faceted-sm shrink-0"
                       />
-                      <div className="text-[11px] font-mono">
-                        <div className="text-cyan-300 font-bold">OPTICAL SCAN ATTACHED</div>
-                        <div className="text-slate-400 text-[10px]">Ready for local GOLEM analysis</div>
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="text-[10px] font-mono text-cyan-300 font-semibold truncate">
+                          ATTACHED_SCAN.JPG
+                        </div>
+                        <VisionAttachmentBadge
+                          state={visionState}
+                          measurement={attachedVision}
+                        />
                       </div>
                     </div>
                     <button
                       onClick={() => {
                         setAttachedThumbnail(null);
                         setAttachedVision(null);
-                        setVisionState('idle');
+                        setAttachedDrawingGroundingId(null);
+                        setVisionState('REFERENCE ONLY');
                       }}
-                      className="p-1 text-slate-400 hover:text-red-400 transition-colors cursor-pointer"
-                      title="Remove attachment"
+                      className="p-1.5 text-slate-400 hover:text-red-400 transition-colors cursor-pointer shrink-0"
+                      title={t.removeAttachment}
                     >
                       <X className="w-4 h-4" />
                     </button>
                   </div>
                 )}
 
-                {/* Quick Synthesis Presets for Instant Real-Time Testing */}
+                {/* Quick Synthesis Presets */}
                 <div className="mb-2 flex items-center gap-1.5 overflow-x-auto pb-0.5 text-[10px] font-mono select-none scrollbar-none">
-                  <span className="text-slate-500 shrink-0 text-[9px] font-bold tracking-wider">QUICK SYNTH:</span>
+                  <span className="text-slate-500 shrink-0 text-[9px] font-bold tracking-wider">
+                    {t.quickSynthPrefix}
+                  </span>
                   {[
                     'Cylinder diameter 30 height 15',
                     'cube size 3',
@@ -816,37 +856,15 @@ export default function App() {
                   ))}
                 </div>
 
-                {attachedThumbnail && visionState !== 'idle' && (
-                  <div className="mb-2 px-2 py-1.5 border border-cyan-500/25 bg-black/70 font-mono text-[9px] flex items-center justify-between gap-2">
-                    <span className="text-slate-400">
-                      {visionState === 'analyzing'
-                        ? 'VISION ANALYZING · OPENCV / ARUCO'
-                        : visionState === 'measured' && attachedVision
-                        ? `VISION VERIFIED · ${Number(attachedVision.object.width_mm).toFixed(1)} × ${Number(attachedVision.object.height_mm).toFixed(1)} mm`
-                        : 'REFERENCE IMAGE · NO VERIFIED METRIC MARKER'}
-                    </span>
-                    <span className={
-                      visionState === 'measured'
-                        ? 'text-emerald-400'
-                        : visionState === 'analyzing'
-                        ? 'text-cyan-300'
-                        : 'text-amber-300'
-                    }>
-                      {visionState === 'measured' && attachedVision
-                        ? `${Math.round(Number(attachedVision.confidence) * 100)}%`
-                        : visionState.toUpperCase()}
-                    </span>
-                  </div>
-                )}
-
                 {/* Input Row: '+' Button, Input, Send */}
                 <div className="flex items-center gap-2">
                   {/* '+' Button */}
                   <button
+                    id="plus-action-hub-btn"
                     onClick={() => setIsBottomSheetOpen(true)}
                     disabled={isSynthesizing}
                     className="w-10 h-10 shrink-0 bg-slate-950 hover:bg-cyan-950/60 disabled:opacity-50 border border-cyan-500/60 hover:border-cyan-400 text-cyan-400 flex items-center justify-center clip-faceted-sm transition-all cursor-pointer shadow-[0_0_10px_rgba(0,240,255,0.15)]"
-                    title="Add Photo / File / Camera"
+                    title={t.addPeripheralTitle}
                   >
                     <Plus className="w-5 h-5" />
                   </button>
@@ -859,7 +877,7 @@ export default function App() {
                       onChange={(e) => setPromptText(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && !isSynthesizing && handleSendMessage()}
                       disabled={isSynthesizing}
-                      placeholder={isSynthesizing ? "Executing verified 3D/CAD task..." : "Describe a 3D/CAD task..."}
+                      placeholder={isSynthesizing ? t.executing3DTask : t.describe3DTask}
                       className="w-full bg-transparent text-sm text-slate-100 placeholder:text-slate-500 focus:outline-hidden disabled:opacity-50"
                     />
                   </div>
@@ -869,7 +887,7 @@ export default function App() {
                     onClick={() => handleSendMessage()}
                     disabled={isSynthesizing || (!promptText.trim() && !attachedThumbnail)}
                     className="w-10 h-10 shrink-0 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 disabled:hover:bg-cyan-500 text-black flex items-center justify-center clip-faceted-sm transition-all cursor-pointer font-bold shadow-[0_0_12px_rgba(0,240,255,0.3)]"
-                    title={isSynthesizing ? "Synthesis in progress" : "Transmit to GOLEM"}
+                    title={isSynthesizing ? t.synthesisInProgress : t.transmitToGolem}
                   >
                     {isSynthesizing ? (
                       <Activity className="w-4 h-4 animate-spin text-black" />
@@ -884,10 +902,10 @@ export default function App() {
               <GolemDrawer
                 isOpen={isDrawerOpen}
                 onClose={() => setIsDrawerOpen(false)}
-                currentLanguage={currentLanguage}
+                currentLanguage={language}
                 onLanguageChange={(lang) => {
-                  setCurrentLanguage(lang);
-                  showSnackBar(`Language switched to: ${lang.toUpperCase()}`);
+                  setLanguage(lang);
+                  showSnackBar(`${t.snackLangSwitched} ${lang.toUpperCase()}`);
                 }}
                 onSelectFolder={(folderName) => {
                   void organClient.vaults()
@@ -928,6 +946,9 @@ export default function App() {
                 isOpen={isCameraOpen}
                 onClose={() => setIsCameraOpen(false)}
                 onCapture={handleCameraCapture}
+                initialMode={cameraInitialMode}
+                onCaptureDatasetReady={handleCaptureDatasetReady}
+                onDrawingConfirmed={handleDrawingConfirmed}
               />
             </div>
           </div>
@@ -958,5 +979,13 @@ export default function App() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <I18nProvider>
+      <GolemAppContent />
+    </I18nProvider>
   );
 }

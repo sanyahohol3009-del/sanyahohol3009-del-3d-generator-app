@@ -164,6 +164,7 @@ export class OrganClient {
     message: string;
     imageDataUrl?: string;
     visionMeasurementId?: string;
+    drawingGroundingId?: string;
     preferredProvider?: string;
     traceId?: string;
     maxTime?: number;
@@ -174,6 +175,7 @@ export class OrganClient {
         message: input.message,
         image_data_url: input.imageDataUrl,
         vision_measurement_id: input.visionMeasurementId,
+        drawing_grounding_id: input.drawingGroundingId,
         preferred_provider: input.preferredProvider || 'auto',
         trace_id: input.traceId,
         max_time: input.maxTime ?? 180,
@@ -208,6 +210,146 @@ export class OrganClient {
           image_data_url: input.imageDataUrl,
           marker_size_mm: input.markerSizeMm ?? 50,
           marker_id: input.markerId ?? 0,
+        }),
+      },
+      true,
+    );
+  }
+
+  visionSessionStart(input?: { mode?: string; scaleProvider?: string }) {
+    return this.request(
+      '/v1/vision/session/start',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: input?.mode || 'auto',
+          scale_provider: input?.scaleProvider || 'aruco',
+        }),
+      },
+      true,
+    );
+  }
+
+  visionSessionFrame(input: {
+    sessionId: string;
+    imageDataUrl: string;
+    timestamp?: number;
+  }) {
+    return this.request(
+      '/v1/vision/session/frame',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          session_id: input.sessionId,
+          image_data_url: input.imageDataUrl,
+          timestamp: input.timestamp ?? Date.now(),
+        }),
+      },
+      true,
+    );
+  }
+
+  visionObjectSelect(input: {
+    sessionId?: string;
+    bbox: { x: number; y: number; width: number; height: number };
+    locked?: boolean;
+  }) {
+    return this.request(
+      '/v1/vision/object/select',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          session_id: input.sessionId,
+          bbox: input.bbox,
+          locked: input.locked ?? true,
+        }),
+      },
+      true,
+    );
+  }
+
+  visionCaptureStart(input?: { objectLabel?: string; targetSectorCount?: number }) {
+    return this.request(
+      '/v1/vision/capture/start',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          object_label: input?.objectLabel || 'target_object',
+          target_sector_count: input?.targetSectorCount ?? 8,
+        }),
+      },
+      true,
+    );
+  }
+
+  visionCaptureFrame(input: {
+    captureSessionId: string;
+    sectorIndex: number;
+    yawDeg: number;
+    pitchDeg: number;
+    imageDataUrl: string;
+  }) {
+    return this.request(
+      '/v1/vision/capture/frame',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          capture_session_id: input.captureSessionId,
+          sector_index: input.sectorIndex,
+          yaw_deg: input.yawDeg,
+          pitch_deg: input.pitchDeg,
+          image_data_url: input.imageDataUrl,
+        }),
+      },
+      true,
+    );
+  }
+
+  visionCaptureFinish(input: { captureSessionId: string }) {
+    return this.request(
+      '/v1/vision/capture/finish',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          capture_session_id: input.captureSessionId,
+        }),
+      },
+      true,
+    );
+  }
+
+  drawingAnalyze(input: { imageDataUrl?: string; pdfBase64?: string; filename?: string }) {
+    return this.request(
+      '/v1/vision/drawing/analyze',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          image_data_url: input.imageDataUrl,
+          pdf_base64: input.pdfBase64,
+          filename: input.filename || 'drawing.png',
+        }),
+      },
+      true,
+    );
+  }
+
+  drawingConfirm(input: {
+    drawingId?: string;
+    targetCad: 'FreeCAD' | 'OpenSCAD';
+    dimensions: Array<{
+      name: string;
+      nominalValue: number;
+      unit: string;
+    }>;
+  }) {
+    return this.request(
+      '/v1/vision/drawing/confirm',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          drawing_id: input.drawingId,
+          target_cad: input.targetCad,
+          dimensions: input.dimensions,
         }),
       },
       true,

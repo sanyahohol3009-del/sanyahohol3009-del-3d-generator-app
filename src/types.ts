@@ -52,11 +52,14 @@ export interface VisionMeasurement {
   measurement_id: string;
   status: string;
   mode: string;
-  marker: {
+  truth_state?: 'VERIFIED' | 'APPROXIMATE' | 'REFERENCE ONLY' | 'NEED MORE INPUT';
+  marker?: {
     id: number;
     size_mm: number;
     dictionary?: string;
   };
+  scale?: { provider?: string; unit?: string; px_per_mm?: number; mm_per_pixel?: number; confidence?: number; verified?: boolean; tick_count?: number; };
+  limitations?: string[];
   object: {
     width_mm: number;
     height_mm: number;
@@ -120,3 +123,5 @@ export interface FlutterCodeFile {
   description: string;
   code: string;
 }
+
+export * from './types/vision';
